@@ -324,7 +324,7 @@ class Main(Star):
             
             # 触发事件处理器
             for evt in events:
-                logger.debug(f"触发事件: {evt.type}，数据: {evt.data}")
+                logger.debug(f"触发事件: {evt.event_type.value}，数据: {evt.data}")
                 await self.event_trigger.trigger_event(evt)
         
         logger.debug(f"情绪分析完成，结果: {result['emotion'].value if result['emotion'] else '无'}, 自拍: {result['should_selfie']}")
