@@ -535,34 +535,41 @@ class Main(Star):
         
         weather_text = ""
         
-        # 尝试使用LLM的天气工具获取天气
-        provider_id = self._get_provider_id()
-        if provider_id:
-            try:
-                # Token优化：精简提示词
-                prompt = f"查询{self.weather_location}天气，仅返回简要描述。"
-                logger.info(f"开始查询 {self.weather_location} 的天气")
-                resp = await self.context.llm_generate(
-                    chat_provider_id=provider_id,
-                    prompt=prompt,
-                )
-                weather_text = (resp.completion_text or "").strip()
-                if weather_text:
-                    logger.info(f"天气查询成功: {weather_text}")
-            except Exception as e:
-                logger.debug(f"使用天气工具获取天气失败: {e}")
-        
-        # 兜底：使用wttr.in
-        if not weather_text:
-            try:
-                async with aiohttp.ClientSession() as session:
-                    url = f"https://wttr.in/{self.weather_location}?format=3&lang=zh-cn"
-                    async with session.get(url, timeout=5) as resp:
-                        if resp.status == 200:
-                            weather_text = (await resp.text()).strip()
+        # 优先使用wttr.in获取实时天气
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = f"https://wttr.in/{self.weather_location}?format=3&lang=zh-cn"
+                async with session.get(url, timeout=5) as resp:
+                    if resp.status == 200:
+                        weather_text = (await resp.text()).strip()
+                        # 检查返回的是否是有效的天气信息
+                        if weather_text and "抱歉" not in weather_text and "无法" not in weather_text and "未知" not in weather_text:
                             logger.info(f"通过wttr.in获取天气成功: {weather_text}")
-            except Exception:
-                pass
+                        else:
+                            weather_text = ""
+        except Exception as e:
+            logger.debug(f"通过wttr.in获取天气失败: {e}")
+        
+        # 如果wttr.in失败，尝试使用LLM的天气工具
+        if not weather_text:
+            provider_id = self._get_provider_id()
+            if provider_id:
+                try:
+                    # Token优化：精简提示词
+                    prompt = f"查询{self.weather_location}天气，仅返回简要描述。"
+                    logger.info(f"开始查询 {self.weather_location} 的天气")
+                    resp = await self.context.llm_generate(
+                        chat_provider_id=provider_id,
+                        prompt=prompt,
+                    )
+                    weather_text = (resp.completion_text or "").strip()
+                    # 检查返回的是否是有效的天气信息
+                    if weather_text and "抱歉" not in weather_text and "无法" not in weather_text and "未知" not in weather_text:
+                        logger.info(f"天气查询成功: {weather_text}")
+                    else:
+                        weather_text = ""
+                except Exception as e:
+                    logger.debug(f"使用天气工具获取天气失败: {e}")
         
         # 更新缓存
         if weather_text:
