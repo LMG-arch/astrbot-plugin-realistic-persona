@@ -234,9 +234,11 @@ pip install -r requirements.txt
   - **修复自动发布**：使用正确的配置项检查自动发布功能
 - v1.6.11: 自动配图确认
   - **确认自动配图**：自动发布说说时会自动生成相关配图
+- v1.6.12: 日程生成优化
+  - **增强错误处理**：优化日程生成的错误处理机制，提高稳定性
 
 ## 致谢
 
 本插件整合了以下插件的功能：
 - astrbot_plugin_ms_aiimg (竹和木)
-- astrbot_plugin_life_qzone (custom)
+- astrbot_plugin_qzone

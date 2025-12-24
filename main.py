@@ -465,8 +465,23 @@ class Main(Star):
             logger.info(f"日程生成成功，长度: {len(schedule_text)} 字符")
         except Exception as e:
             logger.error(f"生成日程失败: {e}")
-            schedule_text = self._build_fallback_schedule(today_str)
-            
+            # 尝试使用更简化的提示词再次生成
+            try:
+                simple_prompt = f"为{self.persona_name}规划{today_str}的简单日程，包含穿搭和主要活动。"
+                resp = await self.context.llm_generate(
+                    chat_provider_id=provider_id,
+                    prompt=simple_prompt,
+                )
+                schedule_text = (resp.completion_text or "").strip()
+                if schedule_text:
+                    logger.info(f"使用简化提示词生成日程成功，长度: {len(schedule_text)} 字符")
+                else:
+                    logger.warning("简化提示词也无法生成日程")
+                    schedule_text = self._build_fallback_schedule(today_str)
+            except Exception as e2:
+                logger.error(f"简化提示词生成日程也失败: {e2}")
+                schedule_text = self._build_fallback_schedule(today_str)
+                
         if not schedule_text:
             schedule_text = self._build_fallback_schedule(today_str)
             
