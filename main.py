@@ -761,11 +761,11 @@ class Main(Star):
         '''
         
         if not self.llm_tool_enabled:
-            yield event.plain_result("绘图工具已被禁用")
+            yield "绘图工具已被禁用"
             return
         
         if not self.api_key:
-            yield event.plain_result("API密钥未配置，无法生成图片")
+            yield "API密钥未配置，无法生成图片"
             return
         
         try:
@@ -799,28 +799,37 @@ class Main(Star):
             elif any(word in prompt_lower for word in ["酷", "帅", "cool"]):
                 natural_response = "耍酷一下~"
             elif any(word in prompt_lower for word in ["实验", "做实验"]):
-                natural_response = "在做实验呢（图片）"
+                natural_response = "在做实验呢"
             elif any(word in prompt_lower for word in ["学习", "看书", "读书"]):
-                natural_response = "在认真学习呢（图片）"
+                natural_response = "在认真学习呢"
             elif any(word in prompt_lower for word in ["吃饭", "美食", "food"]):
-                natural_response = "美食时间~（图片）"
+                natural_response = "美食时间~"
             elif any(word in prompt_lower for word in ["散步", "走路", "walk"]):
-                natural_response = "出去走走~（图片）"
+                natural_response = "出去走走~"
             elif any(word in prompt_lower for word in ["睡觉", "sleep", "休息"]):
-                natural_response = "准备休息啦（图片）"
+                natural_response = "准备休息啦"
             else:
                 # 默认回复，更自然的表达
-                natural_response = f"看看这个~（图片）"
+                natural_response = f"看看这个~"
             
-            # 构造并发送图片+文字消息
+            # 构造并发送图片+文字消息给用户
             chain: List[BaseMessageComponent] = [
-                Plain(natural_response + "\n"),
+                Plain(natural_response + "（图片）\n"),
                 Image.fromURL(image_url)
             ]
-            yield event.chain_result(chain)
+            
+            # 发送消息给用户（在后台发送，不返回给LLM）
+            await event.send(event.chain_result(chain))
+            
+            # 返回一个简洁的结果给LLM，告诉它图片已发送
+            # 这样LLM就知道图片已发送，可以继续进行自然对话
+            yield f"图片已生成并发送给用户，图片内容：{prompt}，描述：{natural_response}。请继续自然对话。"
         
         except Exception as e:
-            yield event.plain_result(f"生成图片时遇到问题: {str(e)}")
+            error_msg = f"生成图片时遇到问题: {str(e)}"
+            # 发送错误信息给用户
+            await event.send(event.plain_result(error_msg))
+            yield f"图片生成失败：{str(e)}"
     
     # ========== 命令处理器 ==========
     
