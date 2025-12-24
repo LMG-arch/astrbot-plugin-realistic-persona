@@ -1,0 +1,198 @@
+{
+  "_section_ai_image": {
+    "description": "========== AI绘图配置 ==========",
+    "type": "string",
+    "invisible": true
+  },
+  "api_key": {
+    "description": "ModelScope API密钥",
+    "type": "string",
+    "default": "",
+    "hint": "在ModelScope平台获取的API密钥，用于AI绘图功能"
+  },
+  "model": {
+    "description": "AI绘图模型",
+    "type": "string",
+    "default": "iic/sdxl-turbo",
+    "hint": "ModelScope上的文生图模型名称"
+  },
+  "api_url": {
+    "description": "API基础URL",
+    "type": "string",
+    "default": "https://api.modelscope.com/api/",
+    "hint": "ModelScope API的基础地址"
+  },
+  "provider": {
+    "description": "图片生成服务商",
+    "type": "string",
+    "default": "ms",
+    "options": ["ms", "modelscope"],
+    "labels": ["ModelScope", "ModelScope(完整)"]
+  },
+  "size": {
+    "description": "默认图片尺寸",
+    "type": "string",
+    "default": "1080x1920",
+    "options": ["1080x1920", "1920x1080", "1024x1024", "512x512"],
+    "labels": ["竖屏(1080x1920)", "横屏(1920x1080)", "方形(1024x1024)", "小方形(512x512)"]
+  },
+  
+  "_section_emotion": {
+    "description": "========== 情绪感知配置 ==========",
+    "type": "string",
+    "invisible": true
+  },
+  "enable_emotion_detection": {
+    "description": "启用情绪感知",
+    "type": "bool",
+    "default": true,
+    "hint": "自动检测用户情绪并作出相应反馈"
+  },
+  "enable_auto_selfie": {
+    "description": "启用自动自拍",
+    "type": "bool",
+    "default": false,
+    "condition": {"enable_emotion_detection": true},
+    "hint": "根据情绪自动生成AI自拍照片"
+  },
+  "selfie_trigger_chance": {
+    "description": "自拍触发概率",
+    "type": "float",
+    "default": 0.3,
+    "condition": {"enable_auto_selfie": true},
+    "hint": "当检测到符合条件的情绪时，触发自拍的概率(0-1)"
+  },
+  "enable_proactive_messages": {
+    "description": "启用主动消息",
+    "type": "bool",
+    "default": false,
+    "hint": "是否启用根据上下文主动发送消息的功能"
+  },
+  "idle_greeting_delay": {
+    "description": "空闲问候延迟(秒)",
+    "type": "int",
+    "default": 600,
+    "condition": {"enable_proactive_messages": true},
+    "hint": "用户空闲多久后发送问候消息"
+  },
+  "enable_context_events": {
+    "description": "启用上下文事件",
+    "type": "bool",
+    "default": true,
+    "hint": "检测对话事件并主动回应"
+  },
+  "llm_tool_enabled": {
+    "description": "启用LLM工具调用",
+    "type": "bool",
+    "default": true,
+    "hint": "是否允许AI通过工具调用生成图片"
+  },
+  
+  "_section_life_simulation": {
+    "description": "========== 生活模拟配置 ==========",
+    "type": "string",
+    "invisible": true
+  },
+  "enable_life_simulation": {
+    "description": "启用生活模拟",
+    "type": "bool",
+    "default": true,
+    "hint": "模拟真实的日常生活状态、日程安排和情绪变化"
+  },
+  "persona_name": {
+    "description": "角色名称",
+    "type": "string",
+    "default": "她",
+    "condition": {"enable_life_simulation": true},
+    "hint": "AI角色的称呼，用于日程生成等场景"
+  },
+  "schedule_hour": {
+    "description": "日程生成时间(小时)",
+    "type": "int",
+    "default": 7,
+    "condition": {"enable_life_simulation": true},
+    "hint": "每天几点开始生成当天的日程安排(0-23)"
+  },
+  "news_hour": {
+    "description": "新闻学习时间(小时)",
+    "type": "int",
+    "default": 7,
+    "condition": {"enable_life_simulation": true},
+    "hint": "每天几点开始获取当天早间新闻(0-23)，默认早上7点"
+  },
+  "weather_location": {
+    "description": "天气查询位置",
+    "type": "string",
+    "default": "",
+    "condition": {"enable_life_simulation": true},
+    "hint": "用于查询天气信息的城市名称，如：Shanghai、Beijing。需启用天气工具以获取实时数据"
+  },
+  "news_topics": {
+    "description": "关注话题列表",
+    "type": "list",
+    "default": ["科技", "生活方式", "兴趣相关话题"],
+    "condition": {"enable_life_simulation": true},
+    "hint": "角色感兴趣并会关注的新闻话题。需启用联网工具以获取真实新闻"
+  },
+  
+  "_section_qzone": {
+    "description": "========== QQ空间功能配置 ==========",
+    "type": "string",
+    "invisible": true
+  },
+  "enable_qzone": {
+    "description": "启用QQ空间功能",
+    "type": "bool",
+    "default": false,
+    "hint": "是否启用QQ空间日记、评论、表白墙等功能"
+  },
+  "publish_cron": {
+    "description": "[已废弃]自动发说说Cron表达式",
+    "type": "string",
+    "default": "",
+    "condition": {"enable_qzone": true},
+    "hint": "此配置项已废弃，请使用publish_times_per_day和publish_time_ranges"
+  },
+  "publish_times_per_day": {
+    "description": "每天发说说次数",
+    "type": "int",
+    "default": 1,
+    "condition": {"enable_qzone": true},
+    "hint": "每天自动发布说说的次数，默认1次"
+  },
+  "publish_time_ranges": {
+    "description": "发说说时间段",
+    "type": "list",
+    "default": ["9-12", "14-18", "19-22"],
+    "condition": {"enable_qzone": true},
+    "hint": "发说说的时间段列表，格式为'9-12'、'14-18'等，系统会在这些时间段内随机选择时间发布"
+  },
+  "insomnia_probability": {
+    "description": "失眠发说说概率",
+    "type": "float",
+    "default": 0.2,
+    "condition": {"enable_qzone": true},
+    "hint": "晚上23:00-02:00之间随机发失眠说说的概率（0-1之间），0表示不发，0.2表示20%概率"
+  },
+  "diary_max_msg": {
+    "description": "日记最大消息数",
+    "type": "int",
+    "default": 200,
+    "condition": {"enable_qzone": true},
+    "hint": "生成日记时最多读取的群聊消息条数"
+  },
+  "diary_prompt": {
+    "description": "日记生成提示",
+    "type": "text",
+    "default": "",
+    "condition": {"enable_qzone": true},
+    "hint": "生成QQ空间日记/说说时的补充提示词"
+  },
+  "comment_prompt": {
+    "description": "评论生成提示",
+    "type": "text",
+    "default": "",
+    "condition": {"enable_qzone": true},
+    "hint": "生成评论内容时使用的系统提示"
+  }
+}
