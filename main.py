@@ -778,8 +778,13 @@ class Main(Star):
             # 发送图片生成请求
             image_url = await self._request_image(prompt, size)
             
-            # 构造并发送图片消息
-            chain: List[BaseMessageComponent] = [Image.fromURL(image_url)]
+            # 构造并发送图片+文字消息
+            # 这里我们添加一个默认的文字回复，或者可以从prompt中提取一些信息
+            text_response = f"生成了一张图片: {prompt[:50]}..."  # 限制文字长度
+            chain: List[BaseMessageComponent] = [
+                Plain(text_response + "\n"),
+                Image.fromURL(image_url)
+            ]
             yield event.chain_result(chain)
         
         except Exception as e:

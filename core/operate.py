@@ -279,6 +279,10 @@ class PostOperator:
                     if img_prompt:
                         img_url = await self.llm._request_modelscope(img_prompt)
                         images = [img_url]
+                        
+                        # 如果没有文字内容，但有图片，可以使用日记内容作为文字
+                        if not text and diary_for_image:
+                            text = diary_for_image
                 except Exception as e:
                     logger.error(f"LLM/ModelScope 生成配图失败：{e}")
 
