@@ -391,6 +391,9 @@ class Main(Star):
                             request.system_prompt = life_info
             except Exception as e:
                 logger.error(f"生活模拟上下文构建失败: {e}")
+        
+        # 确保函数返回None
+        return None
     
     # ========== 生活模拟辅助方法 ==========
     
@@ -778,11 +781,40 @@ class Main(Star):
             # 发送图片生成请求
             image_url = await self._request_image(prompt, size)
             
+            # 根据图片提示词生成自然的文字回复
+            # 从prompt中提取关键信息，生成自然的回复
+            import re
+            
+            # 尝试从prompt中提取主体和动作
+            # 简化处理：根据关键词生成自然回复
+            natural_response = ""
+            prompt_lower = prompt.lower()
+            
+            if any(word in prompt_lower for word in ["自拍", "selfie", "拍照", "照片"]):
+                natural_response = "刚拍了张自拍~"
+            elif any(word in prompt_lower for word in ["开心", "快乐", "微笑", "笑"]):
+                natural_response = "心情不错，记录一下~"
+            elif any(word in prompt_lower for word in ["可爱", "萌", "甜美"]):
+                natural_response = "嘿嘿，是不是很可爱？"
+            elif any(word in prompt_lower for word in ["酷", "帅", "cool"]):
+                natural_response = "耍酷一下~"
+            elif any(word in prompt_lower for word in ["实验", "做实验"]):
+                natural_response = "在做实验呢（图片）"
+            elif any(word in prompt_lower for word in ["学习", "看书", "读书"]):
+                natural_response = "在认真学习呢（图片）"
+            elif any(word in prompt_lower for word in ["吃饭", "美食", "food"]):
+                natural_response = "美食时间~（图片）"
+            elif any(word in prompt_lower for word in ["散步", "走路", "walk"]):
+                natural_response = "出去走走~（图片）"
+            elif any(word in prompt_lower for word in ["睡觉", "sleep", "休息"]):
+                natural_response = "准备休息啦（图片）"
+            else:
+                # 默认回复，更自然的表达
+                natural_response = f"看看这个~（图片）"
+            
             # 构造并发送图片+文字消息
-            # 这里我们添加一个默认的文字回复，或者可以从prompt中提取一些信息
-            text_response = f"生成了一张图片: {prompt[:50]}..."  # 限制文字长度
             chain: List[BaseMessageComponent] = [
-                Plain(text_response + "\n"),
+                Plain(natural_response + "\n"),
                 Image.fromURL(image_url)
             ]
             yield event.chain_result(chain)
