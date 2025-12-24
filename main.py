@@ -342,7 +342,7 @@ class Main(Star):
     # ========== LLM请求钩子 ==========
     
     @filter.on_llm_request()
-    async def on_llm_request_handler(self, event: AstrMessageEvent, request):
+    async def on_llm_request_handler(self, event: AstrMessageEvent, request, *args, **kwargs):
         """LLM 请求前处理：注入情绪信息与"生活模拟"上下文"""
         analysis: Optional[Dict] = None
         
@@ -781,40 +781,10 @@ class Main(Star):
             # 发送图片生成请求
             image_url = await self._request_image(prompt, size)
             
-            # 根据图片提示词生成自然的文字回复
-            # 从prompt中提取关键信息，生成自然的回复
-            import re
-            
-            # 尝试从prompt中提取主体和动作
-            # 简化处理：根据关键词生成自然回复
-            natural_response = ""
-            prompt_lower = prompt.lower()
-            
-            if any(word in prompt_lower for word in ["自拍", "selfie", "拍照", "照片"]):
-                natural_response = "刚拍了张自拍~"
-            elif any(word in prompt_lower for word in ["开心", "快乐", "微笑", "笑"]):
-                natural_response = "心情不错，记录一下~"
-            elif any(word in prompt_lower for word in ["可爱", "萌", "甜美"]):
-                natural_response = "嘿嘿，是不是很可爱？"
-            elif any(word in prompt_lower for word in ["酷", "帅", "cool"]):
-                natural_response = "耍酷一下~"
-            elif any(word in prompt_lower for word in ["实验", "做实验"]):
-                natural_response = "在做实验呢"
-            elif any(word in prompt_lower for word in ["学习", "看书", "读书"]):
-                natural_response = "在认真学习呢"
-            elif any(word in prompt_lower for word in ["吃饭", "美食", "food"]):
-                natural_response = "美食时间~"
-            elif any(word in prompt_lower for word in ["散步", "走路", "walk"]):
-                natural_response = "出去走走~"
-            elif any(word in prompt_lower for word in ["睡觉", "sleep", "休息"]):
-                natural_response = "准备休息啦"
-            else:
-                # 默认回复，更自然的表达
-                natural_response = f"看看这个~"
-            
             # 构造并发送图片+文字消息给用户
+            # 只发送基本的提示，让AI在后续对话中自然表达
             chain: List[BaseMessageComponent] = [
-                Plain(natural_response + "（图片）\n"),
+                Plain("（图片）\n"),
                 Image.fromURL(image_url)
             ]
             
@@ -822,8 +792,8 @@ class Main(Star):
             await event.send(event.chain_result(chain))
             
             # 返回一个简洁的结果给LLM，告诉它图片已发送
-            # 这样LLM就知道图片已发送，可以继续进行自然对话
-            yield f"图片已生成并发送给用户，图片内容：{prompt}，描述：{natural_response}。请继续自然对话。"
+            # 让LLM根据图片内容和上下文自然地继续对话
+            yield f"图片已生成并发送给用户，内容为：{prompt}。请根据图片内容自然地继续对话。"
         
         except Exception as e:
             error_msg = f"生成图片时遇到问题: {str(e)}"
