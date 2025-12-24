@@ -619,13 +619,24 @@ class Main(Star):
         """构造注入到 system_prompt 中的"生活模拟"信息片段（优化版）"""
         now = datetime.now()
         today_str = now.strftime("%Y-%m-%d")
-        schedule_text = await self._maybe_generate_schedule(now)
-        news_text = await self._maybe_fetch_news(now)
-        weather_desc = await self._get_weather_desc()
-        current_activity = self._get_current_activity(now)
         
-        # 从系统获取人设
-        persona_profile = await self._get_system_persona_profile()
+        # 检查是否已缓存当天的生活数据
+        if not hasattr(self, '_cached_life_data') or self._cached_life_data.get('date') != today_str:
+            # 缓存当天的数据
+            self._cached_life_data = {
+                'date': today_str,
+                'schedule': await self._maybe_generate_schedule(now),
+                'news': await self._maybe_fetch_news(now),
+                'weather': await self._get_weather_desc(),
+                'persona': await self._get_system_persona_profile(),
+            }
+        
+        # 使用缓存的数据
+        schedule_text = self._cached_life_data['schedule']
+        news_text = self._cached_life_data['news']
+        weather_desc = self._cached_life_data['weather']
+        persona_profile = self._cached_life_data['persona']
+        current_activity = self._get_current_activity(now)
         
         last_emotion = None
         if analysis and analysis.get("emotion"):
@@ -781,10 +792,8 @@ class Main(Star):
             # 发送图片生成请求
             image_url = await self._request_image(prompt, size)
             
-            # 构造并发送图片+文字消息给用户
-            # 只发送基本的提示，让AI在后续对话中自然表达
+            # 构造并发送图片消息给用户（只发送图片，不加任何文字）
             chain: List[BaseMessageComponent] = [
-                Plain("（图片）\n"),
                 Image.fromURL(image_url)
             ]
             
