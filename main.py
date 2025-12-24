@@ -228,7 +228,7 @@ class Main(Star):
         self.llm = LLMAction(self.context, self.config, client)
         
         # 加载自动发说说模块
-        if self.publish_cron:
+        if self.config.get("enable_qzone") and (self.config.get("publish_times_per_day", 0) > 0 or self.config.get("insomnia_probability", 0) > 0):
             # 注意：这里只需要简化的发布功能，不需要完整的PostOperator
             from .core.scheduler import AutoPublish
             # 创建简化的operator用于自动发布

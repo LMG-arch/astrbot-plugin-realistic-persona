@@ -1,6 +1,6 @@
 name: "astrbot_plugin_realistic_persona"
 author: "custom"
-desc: "拟人化角色行为系统：整合情绪感知、生活模拟、QQ空间日记、AI配图等功能，使用系统人设，支持终端日志，支持自然图文并茂回复。v1.6.9优化天气获取"
-version: "1.6.9"
+desc: "拟人化角色行为系统：整合情绪感知、生活模拟、QQ空间日记、AI配图等功能，使用系统人设，支持终端日志，支持自然图文并茂回复。v1.6.11确认自动配图"
+version: "1.6.11"
 repo: ""
 display_name: "拟人化角色系统"
