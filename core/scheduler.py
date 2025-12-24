@@ -185,11 +185,45 @@ class AutoPublish:
         for i in range(self.publish_times_per_day):
             # 选择一个时间段
             time_range = self.publish_time_ranges[i % len(self.publish_time_ranges)]
-            start_hour, end_hour = map(int, time_range.split("-"))
             
-            # 在该时间段内随机选择一个时间
-            random_hour = random.randint(start_hour, end_hour - 1)
-            random_minute = random.randint(0, 59)
+            # 支持两种格式：小时范围（如"9-12"）和具体时间范围（如"20:00-20:20"）
+            if ":" in time_range:
+                # 具体时间范围格式，如"20:00-20:20"
+                start_time_str, end_time_str = time_range.split("-")
+                start_hour, start_minute = map(int, start_time_str.split(":"))
+                end_hour, end_minute = map(int, end_time_str.split(":"))
+                
+                # 计算总分钟数范围
+                start_total_minutes = start_hour * 60 + start_minute
+                end_total_minutes = end_hour * 60 + end_minute
+                
+                # 如果结束时间小于开始时间（跨天），需要特殊处理
+                if end_total_minutes <= start_total_minutes:
+                    # 跨天情况，比如"23:30-01:30"
+                    total_minutes_diff = (24 * 60 - start_total_minutes) + end_total_minutes
+                    random_offset = random.randint(0, total_minutes_diff)
+                    if random_offset <= (24 * 60 - start_total_minutes):
+                        # 在当天范围内
+                        final_total_minutes = start_total_minutes + random_offset
+                        random_hour = final_total_minutes // 60
+                        random_minute = final_total_minutes % 60
+                    else:
+                        # 在跨天范围内
+                        final_total_minutes = (random_offset - (24 * 60 - start_total_minutes)) % (24 * 60)
+                        random_hour = final_total_minutes // 60
+                        random_minute = final_total_minutes % 60
+                else:
+                    # 普通情况
+                    random_total_minutes = random.randint(start_total_minutes, end_total_minutes)
+                    random_hour = random_total_minutes // 60
+                    random_minute = random_total_minutes % 60
+            else:
+                # 小时范围格式，如"9-12"
+                start_hour, end_hour = map(int, time_range.split("-"))
+                
+                # 在该时间段内随机选择一个时间
+                random_hour = random.randint(start_hour, end_hour - 1)
+                random_minute = random.randint(0, 59)
             
             # 计算目标时间
             target_time = now.replace(hour=random_hour, minute=random_minute, second=0, microsecond=0)

@@ -228,7 +228,13 @@ class Main(Star):
         self.llm = LLMAction(self.context, self.config, client)
         
         # 加载自动发说说模块
-        if self.config.get("enable_qzone") and (self.config.get("publish_times_per_day", 0) > 0 or self.config.get("insomnia_probability", 0) > 0):
+        enable_qzone = self.config.get("enable_qzone", False)
+        publish_times = self.config.get("publish_times_per_day", 0)
+        insomnia_prob = self.config.get("insomnia_probability", 0)
+        
+        logger.info(f"QQ空间配置: enable_qzone={enable_qzone}, publish_times_per_day={publish_times}, insomnia_probability={insomnia_prob}")
+        
+        if enable_qzone and (publish_times > 0 or insomnia_prob > 0):
             # 注意：这里只需要简化的发布功能，不需要完整的PostOperator
             from .core.scheduler import AutoPublish
             # 创建简化的operator用于自动发布
@@ -236,6 +242,9 @@ class Main(Star):
                 self.context, self.config, self.qzone, None, self.llm, self.style
             )
             self.auto_publish = AutoPublish(self.context, self.config, self.operator)
+            logger.info(f"自动发布模块已加载: 每天{publish_times}次，失眠概率{insomnia_prob}")
+        else:
+            logger.info("自动发布模块未满足加载条件，跳过加载")
         
         logger.info("QQ空间自动发说说模块加载完毕！")
     
@@ -378,6 +387,8 @@ class Main(Star):
                     self.context_state.update_state(session_id, "emotion_analysis", analysis)
             except Exception as e:
                 logger.error(f"情绪分析失败: {e}")
+                # 即使情绪分析失败，也要确保不影响LLM请求
+                pass
         
         # 生活模拟：根据日程、天气、新闻等构造额外系统提示
         if self.enable_life_simulation:
@@ -391,6 +402,8 @@ class Main(Star):
                             request.system_prompt = life_info
             except Exception as e:
                 logger.error(f"生活模拟上下文构建失败: {e}")
+                # 即使生活模拟失败，也要确保不影响LLM请求
+                pass
         
         # 确保函数返回None
         return None
