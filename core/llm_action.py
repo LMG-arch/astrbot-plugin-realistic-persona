@@ -33,10 +33,73 @@ class LLMAction:
             "api_url",
             "https://api.modelscope.com/api/",
         )
-        self.ms_model: str = self.config.get("model", "iic/sdxl-turbo")
+        self.ms_model: str = self.config.get("ms_model", "iic/sdxl-turbo")
         self.ms_size: str = self.config.get("size", "1080x1920")
         self.weather_location: str = self.config.get("weather_location", "")
 
+    async def _request_image_with_fallback(self, prompt: str, size: str | None = None) -> str:
+        """调用图片生成API，支持多平台和自动切换
+        
+        Args:
+            prompt: 图片生成提示词
+            size: 图片尺寸
+            
+        Returns:
+            本地图片路径
+            
+        Raises:
+            ValueError: 当所有平台都失败时
+        """
+        # 获取配置的主平台和备用平台
+        primary_provider = self.config.get("provider", "ms")
+        backup_providers = self.config.get("backup_providers", ["openai", "aliyun"])
+        
+        # 构建平台列表（主平台优先）
+        all_providers = [primary_provider] + [p for p in backup_providers if p != primary_provider]
+        
+        logger.info(f"[绘图] 尝试平台列表: {all_providers}，主平台: {primary_provider}")
+        
+        last_error = None
+        for provider in all_providers:
+            try:
+                logger.info(f"[绘图] 尝试使用平台: {provider}")
+                
+                if provider in ["ms", "modelscope"]:
+                    # ModelScope 平台
+                    if not self.ms_api_key:
+                        logger.warning(f"[绘图] {provider} 平台未配置API密钥，跳过")
+                        continue
+                    return await self._request_modelscope(prompt, size)
+                elif provider == "openai":
+                    # OpenAI 平台
+                    openai_api_key = self.config.get("openai_api_key", "")
+                    if not openai_api_key:
+                        logger.warning(f"[绘图] OpenAI 平台未配置API密钥，跳过")
+                        continue
+                    return await self._request_openai_dalle(prompt, size)
+                elif provider == "aliyun":
+                    # 阿里云平台
+                    aliyun_api_key = self.config.get("aliyun_api_key", "")
+                    if not aliyun_api_key:
+                        logger.warning(f"[绘图] 阿里云平台未配置API密钥，跳过")
+                        continue
+                    return await self._request_aliyun(prompt, size)
+                else:
+                    logger.warning(f"[绘图] 不支持的平台: {provider}，跳过")
+                    continue
+                    
+            except Exception as e:
+                logger.warning(f"[绘图] {provider} 平台调用失败: {e}")
+                last_error = e
+                continue  # 尝试下一个平台
+        
+        # 如果所有平台都失败了
+        if last_error:
+            logger.error(f"[绘图] 所有绘图平台都失败了，最后错误: {last_error}")
+            raise ValueError(f"所有绘图平台都失败了: {last_error}")
+        else:
+            raise ValueError("没有配置任何绘图平台")
+    
     async def _request_modelscope(self, prompt: str, size: str | None = None) -> str:
         """调用 ModelScope 文生图，下载并保存到本地，返回本地路径"""
         if not self.ms_api_key:
@@ -169,6 +232,153 @@ class LLMAction:
                     f.write(content)
         
         return str(local_path)
+    
+    async def _request_openai_dalle(self, prompt: str, size: str | None = None) -> str:
+        """调用 OpenAI DALL-E 生成图片"""
+        openai_api_key = self.config.get("openai_api_key", "")
+        openai_api_url = self.config.get("openai_api_url", "https://api.openai.com/v1")
+        
+        if not openai_api_key:
+            raise ValueError("未配置 openai_api_key，无法使用 OpenAI DALL-E 生图")
+        
+        # 将尺寸转换为 OpenAI 支持的格式
+        size = size or self.ms_size
+        # OpenAI DALL-E 支持 256x256, 512x512, 1024x1024
+        # 将其他尺寸映射到最接近的 OpenAI 支持的尺寸
+        if "256" in size:
+            openai_size = "256x256"
+        elif "512" in size:
+            openai_size = "512x512"
+        elif "1024" in size:
+            openai_size = "1024x1024"
+        else:
+            # 默认使用 1024x1024
+            openai_size = "1024x1024"
+        
+        headers = {
+            "Authorization": f"Bearer {openai_api_key}",
+            "Content-Type": "application/json",
+        }
+        
+        # 获取模型配置
+        openai_model = self.config.get("openai_model", "dall-e-3")
+        
+        # 构建请求数据
+        payload = {
+            "model": openai_model,  # 从配置获取模型
+            "prompt": prompt,
+            "n": 1,
+            "size": openai_size,
+        }
+        
+        url = f"{openai_api_url}/images/generations"
+        logger.info(f"[OpenAI DALL-E] 请求URL: {url}")
+        logger.info(f"[OpenAI DALL-E] 请求参数: size={openai_size}, prompt={prompt[:50]}...")
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as resp:
+                resp_text = await resp.text()
+                logger.info(f"[OpenAI DALL-E] 响应状态: {resp.status}")
+                logger.info(f"[OpenAI DALL-E] 响应内容: {resp_text[:1000]}...")
+                
+                if resp.status != 200:
+                    logger.error(f"[OpenAI DALL-E] API调用失败: HTTP {resp.status}")
+                    logger.error(f"[OpenAI DALL-E] 错误详情: {resp_text}")
+                    raise ValueError(f"OpenAI DALL-E API调用失败: HTTP {resp.status}, {resp_text[:200]}")
+                
+                try:
+                    data = json.loads(resp_text)
+                except json.JSONDecodeError as e:
+                    logger.error(f"[OpenAI DALL-E] 响应解析失败: {e}")
+                    raise ValueError(f"OpenAI DALL-E 响应解析失败: {e}")
+        
+        # 从响应中提取图片URL
+        if "data" not in data or not data["data"]:
+            logger.error(f"[OpenAI DALL-E] 未找到图片数据")
+            logger.error(f"[OpenAI DALL-E] 完整响应数据: {json.dumps(data, ensure_ascii=False, indent=2)}")
+            raise ValueError("OpenAI DALL-E 未返回图片数据")
+        
+        image_url = data["data"][0].get("url")
+        if not image_url:
+            logger.error(f"[OpenAI DALL-E] 未找到图片URL")
+            logger.error(f"[OpenAI DALL-E] 完整响应数据: {json.dumps(data, ensure_ascii=False, indent=2)}")
+            raise ValueError("OpenAI DALL-E 未返回图片 URL")
+        
+        # 下载图片到本地
+        local_path = await self._download_image(image_url)
+        logger.info(f"[OpenAI DALL-E] 生成的图片已保存到: {local_path}")
+        return local_path
+    
+    async def _request_aliyun(self, prompt: str, size: str | None = None) -> str:
+        """调用阿里云通义万相生成图片"""
+        aliyun_api_key = self.config.get("aliyun_api_key", "")
+        aliyun_api_url = self.config.get("aliyun_api_url", "https://dashscope.aliyuncs.com/api/v1")
+        
+        if not aliyun_api_key:
+            raise ValueError("未配置 aliyun_api_key，无法使用阿里云通义万相生图")
+        
+        size = size or self.ms_size
+        # 阿里云支持的尺寸格式，如 "1024*1024"
+        # 将标准格式转换为阿里云格式
+        ali_size = size.replace("x", "*")
+        
+        headers = {
+            "Authorization": f"Bearer {aliyun_api_key}",
+            "Content-Type": "application/json",
+        }
+        
+        # 获取模型配置
+        aliyun_model = self.config.get("aliyun_model", "wanx-v1")
+        
+        # 构建请求数据
+        payload = {
+            "model": aliyun_model,  # 从配置获取模型
+            "input": {
+                "prompt": prompt,
+                "size": ali_size,
+            },
+            "parameters": {
+                "n": 1,
+            }
+        }
+        
+        url = f"{aliyun_api_url}/services/aigc/text2image"
+        logger.info(f"[阿里云通义万相] 请求URL: {url}")
+        logger.info(f"[阿里云通义万相] 请求参数: size={ali_size}, prompt={prompt[:50]}...")
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as resp:
+                resp_text = await resp.text()
+                logger.info(f"[阿里云通义万相] 响应状态: {resp.status}")
+                logger.info(f"[阿里云通义万相] 响应内容: {resp_text[:1000]}...")
+                
+                if resp.status != 200:
+                    logger.error(f"[阿里云通义万相] API调用失败: HTTP {resp.status}")
+                    logger.error(f"[阿里云通义万相] 错误详情: {resp_text}")
+                    raise ValueError(f"阿里云通义万相 API调用失败: HTTP {resp.status}, {resp_text[:200]}")
+                
+                try:
+                    data = json.loads(resp_text)
+                except json.JSONDecodeError as e:
+                    logger.error(f"[阿里云通义万相] 响应解析失败: {e}")
+                    raise ValueError(f"阿里云通义万相 响应解析失败: {e}")
+        
+        # 从响应中提取图片URL
+        if "output" not in data or "results" not in data["output"] or not data["output"]["results"]:
+            logger.error(f"[阿里云通义万相] 未找到图片数据")
+            logger.error(f"[阿里云通义万相] 完整响应数据: {json.dumps(data, ensure_ascii=False, indent=2)}")
+            raise ValueError("阿里云通义万相 未返回图片数据")
+        
+        image_url = data["output"]["results"][0].get("url")
+        if not image_url:
+            logger.error(f"[阿里云通义万相] 未找到图片URL")
+            logger.error(f"[阿里云通义万相] 完整响应数据: {json.dumps(data, ensure_ascii=False, indent=2)}")
+            raise ValueError("阿里云通义万相 未返回图片 URL")
+        
+        # 下载图片到本地
+        local_path = await self._download_image(image_url)
+        logger.info(f"[阿里云通义万相] 生成的图片已保存到: {local_path}")
+        return local_path
 
     async def _get_weather_desc(self) -> str:
         """获取简单天气描述（用于写日记和画图提示词）"""
@@ -298,6 +508,109 @@ class LLMAction:
         
         return content
 
+    async def _compress_contexts(self, contexts: list[dict[str, str]], max_rounds: int | None = None, compression_threshold: int | None = None) -> list[dict[str, str]]:
+        """压缩对话历史上下文，减少token使用
+        
+        Args:
+            contexts: 原始对话上下文列表
+            max_rounds: 最大对话轮数，超出部分将被丢弃（保留最新的）
+            compression_threshold: 压缩阈值（字符数），超过此值时进行压缩
+            
+        Returns:
+            压缩后的对话上下文列表
+        """
+        if not contexts:
+            return contexts
+
+        # 从配置获取默认值
+        if max_rounds is None:
+            max_rounds = self.config.get("history_max_rounds", 10)
+        if compression_threshold is None:
+            compression_threshold = self.config.get("history_compression_threshold", 2000)
+
+        # 首先检查是否超过最大轮数限制
+        if len(contexts) > max_rounds:
+            # 保留最新的max_rounds轮对话
+            contexts = contexts[-max_rounds:]
+            logger.debug(f"[历史压缩] 超过最大轮数限制({max_rounds})，保留最新的{len(contexts)}轮对话")
+
+        # 检查总字符数是否超过压缩阈值
+        total_chars = sum(len(ctx.get("content", "")) for ctx in contexts)
+        if total_chars <= compression_threshold:
+            logger.debug(f"[历史压缩] 总字符数({total_chars})未超过压缩阈值({compression_threshold})，无需压缩")
+            return contexts
+
+        logger.info(f"[历史压缩] 总字符数({total_chars})超过压缩阈值({compression_threshold})，开始压缩")
+
+        # 检查是否启用了压缩功能
+        if not self.config.get("enable_history_compression", True):
+            logger.info("[历史压缩] 压缩功能已禁用，返回原始上下文")
+            return contexts
+
+        # 进行压缩 - 保留重要信息，精简内容
+        compressed_contexts = []
+        for ctx in contexts:
+            role = ctx.get("role", "user")
+            content = ctx.get("content", "")
+
+            if len(content) <= 500:  # 如果内容已经很短，直接保留
+                compressed_contexts.append({"role": role, "content": content})
+                continue
+
+            # 对长内容进行摘要
+            try:
+                compressed_content = await self._summarize_content(content)
+                compressed_contexts.append({"role": role, "content": compressed_content})
+                logger.debug(f"[历史压缩] 压缩内容: {len(content)} -> {len(compressed_content)} 字符")
+            except Exception as e:
+                logger.warning(f"[历史压缩] 压缩失败，使用原始内容: {e}")
+                # 如果压缩失败，截取前面的部分
+                truncated_content = content[:500] + "..."
+                compressed_contexts.append({"role": role, "content": truncated_content})
+                logger.debug(f"[历史压缩] 使用截取内容: {len(truncated_content)} 字符")
+
+        return compressed_contexts
+
+    async def _summarize_content(self, content: str) -> str:
+        """使用LLM对长内容进行摘要
+        
+        Args:
+            content: 需要摘要的内容
+            
+        Returns:
+            摘要后的内容
+        """
+        if len(content) <= 500:
+            return content
+
+        # 获取提供商
+        provider = self.context.get_using_provider()
+        if not isinstance(provider, Provider):
+            logger.warning("未配置LLM提供商，无法进行内容摘要")
+            # 简单截断
+            return content[:500] + "..."
+
+        # 构建摘要提示词
+        system_prompt = "你是一个文本摘要助手。请将输入的对话内容精简为关键信息，保留主要内容和情感，输出长度控制在200字以内。只需输出摘要内容，不要添加任何解释。"
+        prompt = f"请摘要以下内容：\n{content}"
+
+        try:
+            response = await provider.text_chat(
+                system_prompt=system_prompt,
+                prompt=prompt
+            )
+            summary = response.completion_text.strip()
+
+            # 如果摘要太长，进一步截断
+            if len(summary) > 500:
+                summary = summary[:500] + "..."
+            
+            return summary
+        except Exception as e:
+            logger.warning(f"LLM摘要失败: {e}，使用截断方法")
+            # 摘要失败时使用简单截断
+            return content[:300] + "..."
+
     async def generate_diary(self, group_id: str = "", topic: str | None = None, persona_profile: str = "", user_id: str = "") -> str | None:
         """
         根据聊天记录 + 人设 + 当天时间/天气生成日记文本
@@ -399,9 +712,13 @@ class LLMAction:
         logger.debug(f"{system_prompt}\n\n{contexts}")
 
         try:
+            # 应用历史压缩
+            compressed_contexts = await self._compress_contexts(contexts)
+            logger.debug(f"[历史压缩] 压缩前: {len(contexts)} 轮对话, 压缩后: {len(compressed_contexts)} 轮对话")
+            
             llm_response = await provider.text_chat(
                 system_prompt=system_prompt,
-                contexts=contexts,
+                contexts=compressed_contexts,  # 使用压缩后的上下文
             )
             diary = self.extract_content(llm_response.completion_text)
             logger.info(f"LLM 生成的日记：{diary}")
@@ -443,6 +760,47 @@ class LLMAction:
 
         except Exception as e:
             raise ValueError(f"LLM 调用失败：{e}")
+
+    async def generate_nickname(self, prompt: str) -> str | None:
+        """让大模型根据提示生成一个合适的昵称
+        
+        Args:
+            prompt: 生成昵称的提示词
+        """
+        # 如果配置了 diary_provider_id 则使用，否则使用默认提供商
+        provider = None
+        if self.diary_provider_id:
+            provider = self.context.get_provider_by_id(self.diary_provider_id)
+        if not provider:
+            provider = self.context.get_using_provider()
+        if not isinstance(provider, Provider):
+            logger.error("未配置用于文本生成任务的 LLM 提供商")
+            return None
+        
+        try:
+            logger.debug(f"[昵称生成] 请求提示: {prompt}")
+            
+            llm_response = await provider.text_chat(
+                system_prompt="你是一个昵称生成助手。请根据给定的信息生成一个合适的QQ昵称。要求：1. 昵称应该自然、真实，像真实用户会使用的昵称；2. 长度控制在2-10个字符；3. 不要包含特殊符号或表情；4. 直接返回昵称，不要包含其他解释或说明。",
+                prompt=prompt,
+            )
+            nickname = (llm_response.completion_text or "").strip()
+            
+            # 清理返回的内容，只保留昵称部分
+            # 如果包含多余的解释，只取第一行或去除多余的字符
+            lines = nickname.split('\n')
+            nickname = lines[0].strip()  # 取第一行
+            
+            # 去除可能的引号
+            if nickname.startswith('"') and nickname.endswith('"'):
+                nickname = nickname[1:-1]
+            
+            logger.info(f"[昵称生成] 生成的昵称：{nickname}")
+            return nickname
+        
+        except Exception as e:
+            logger.error(f"[昵称生成] LLM调用失败：{e}")
+            return None
 
     async def generate_image_prompt_from_diary(self, diary: str, group_id: str = "", user_id: str = "") -> str | None:
         """让大模型根据日记和生活状态生成画图提示词
@@ -535,14 +893,18 @@ class LLMAction:
         
         # 如果有对话历史，提示大模型参考
         if contexts:
-            system_prompt.append("可以参考下面的对话历史，了解当前情境和活动。")
+            system_prompt.append("可以参考下面的对话历史，了解当前情境和活动，只是参考最近的活动，不是现在的。")
         
         full_system_prompt = "\n".join(system_prompt)
         try:
+            # 应用历史压缩
+            compressed_contexts = await self._compress_contexts(contexts)
+            logger.debug(f"[历史压缩] 画图提示词生成 - 压缩前: {len(contexts)} 轮对话, 压缩后: {len(compressed_contexts)} 轮对话")
+            
             resp = await provider.text_chat(
                 system_prompt=full_system_prompt,
                 prompt=f"今天的日记内容如下：\n{diary}",
-                contexts=contexts  # 传入对话历史
+                contexts=compressed_contexts  # 使用压缩后的对话历史
             )
             prompt_text = (resp.completion_text or "").strip()
             logger.info(f"LLM 生成的配图提示词：{prompt_text}")

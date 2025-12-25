@@ -122,37 +122,70 @@ class AutoProfileUpdater:
         self.state[last_update_key] = time.time()
         self._save_state()
     
-    def _generate_nickname(self, emotion: str, intensity: float) -> str:
-        """生成基于情绪的昵称
+    async def _generate_nickname(self, emotion: str, intensity: float, llm_action=None, context_data: str = "") -> str:
+        """生成基于情绪、人设和上下文的昵称
         
         Args:
             emotion: 情绪类型
             intensity: 情绪强度（0-1）
+            llm_action: LLM操作实例（用于生成昵称）
+            context_data: 上下文信息（人设、对话历史、日程等）
             
         Returns:
             新昵称
         """
-        # 情绪前缀映射
-        emotion_prefixes = {
-            "开心": ["😊", "🌟", "✨"],
-            "悲伤": ["😢", "💔", "🌧️"],
-            "生气": ["😠", "💢", "⚡"],
-            "兴奋": ["🎉", "🔥", "⭐"],
-            "平静": ["🌸", "🍃", "☁️"],
-            "困惑": ["🤔", "❓", "💭"],
-            "无聊": ["😴", "🌙", "💤"],
-            "好奇": ["🔍", "💡", "🌈"],
-            "惊讶": ["😲", "✨", "🎊"],
-            "焦虑": ["😰", "💫", "🌪️"]
+        if llm_action:
+            try:
+                # 构建生成昵称的提示词
+                prompt = f"""根据以下信息生成一个合适的QQ昵称：
+
+当前人设: {self.persona_name}
+当前情绪: {emotion}
+情绪强度: {intensity}
+上下文信息: {context_data}
+
+要求：
+1. 昵称应该符合当前人设和情绪状态
+2. 昵称应该自然、真实，像真实用户会使用的昵称
+3. 长度控制在2-10个字符
+4. 不要包含特殊符号或表情
+5. 体现当前的情绪或状态特点
+
+请直接返回昵称，不要包含其他内容。"""
+                
+                # 使用LLM生成昵称
+                generated_nickname = await llm_action.generate_nickname(prompt)
+                if generated_nickname and generated_nickname.strip():
+                    # 确保昵称长度合理
+                    nickname = generated_nickname.strip()[:20]  # 限制长度
+                    return nickname
+            except Exception as e:
+                logger.warning(f"[Profile更新器] 通过LLM生成昵称失败: {e}，使用默认逻辑")
+        
+        # 如果LLM不可用或生成失败，使用备用逻辑
+        # 情绪昵称映射
+        emotion_nicknames = {
+            "开心": ["开心小助手", "阳光助手", "快乐AI"],
+            "悲伤": ["沉思者", "安静的AI", "温柔助手"],
+            "生气": ["严肃助手", "认真AI", "冷静者"],
+            "兴奋": ["活力助手", "热情AI", "兴奋小助手"],
+            "平静": ["宁静助手", "淡然AI", "平和助手"],
+            "困惑": ["思考者", "探索AI", "求知助手"],
+            "无聊": ["慵懒助手", "悠闲AI", "慢节奏助手"],
+            "好奇": ["探索者", "好奇AI", "发现助手"],
+            "惊讶": ["惊叹助手", "惊喜AI", "新奇助手"],
+            "焦虑": ["缓压助手", "安心AI", "放松助手"]
         }
         
-        prefix = emotion_prefixes.get(emotion, [""])[0]
+        import random
+        possible_nicknames = emotion_nicknames.get(emotion, [self.persona_name])
+        base_nickname = random.choice(possible_nicknames)
         
-        # 根据强度决定是否添加前缀
+        # 根据强度调整昵称
         if intensity >= 0.7:
-            return f"{prefix}{self.persona_name}"
+            return f"{base_nickname}"
         elif intensity >= 0.5:
-            return f"{self.persona_name}{prefix}"
+            return f"{base_nickname}"
         else:
             return self.persona_name
     
@@ -275,7 +308,9 @@ class AutoProfileUpdater:
         try:
             # 更新昵称
             if self.enable_nickname and self._can_update("nickname"):
-                new_nickname = self._generate_nickname(emotion, intensity)
+                # 生成上下文数据用于昵称生成
+                context_data = f"情绪: {emotion}, 强度: {intensity}, 人设: {self.persona_name}"
+                new_nickname = await self._generate_nickname(emotion, intensity, llm_action=llm_action, context_data=context_data)
                 if new_nickname != self.state.get("current_nickname"):
                     await event.bot.set_qq_profile(nickname=new_nickname)
                     self.state["current_nickname"] = new_nickname

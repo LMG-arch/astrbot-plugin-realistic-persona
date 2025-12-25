@@ -10,11 +10,23 @@
     "default": "",
     "hint": "在ModelScope平台获取的API密钥，用于AI绘图功能"
   },
-  "model": {
-    "description": "AI绘图模型",
+  "ms_model": {
+    "description": "ModelScope绘图模型",
     "type": "string",
     "default": "iic/sdxl-turbo",
-    "hint": "ModelScope上的文生图模型名称"
+    "hint": "ModelScope上的文生图模型名称，如：iic/sdxl-turbo, stable-diffusion-xl-base-1.0"
+  },
+  "openai_model": {
+    "description": "OpenAI绘图模型",
+    "type": "string",
+    "default": "dall-e-3",
+    "hint": "OpenAI绘图模型名称，如：dall-e-3, dall-e-2"
+  },
+  "aliyun_model": {
+    "description": "阿里云绘图模型",
+    "type": "string",
+    "default": "wanx-v1",
+    "hint": "阿里云通义万相绘图模型名称，如：wanx-v1"
   },
   "api_url": {
     "description": "API基础URL",
