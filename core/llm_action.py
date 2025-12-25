@@ -118,7 +118,8 @@ class LLMAction:
         """获取群聊历史消息"""
         message_seq = 0
         contexts: list[dict] = []
-        while len(contexts) < self.config["diary_max_msg"]:
+        diary_max_msg = self.config.get("diary_max_msg", 100)
+        while len(contexts) < diary_max_msg:
             payloads = {
                 "group_id": group_id,
                 "message_seq": message_seq,
@@ -163,10 +164,11 @@ class LLMAction:
             contexts = await self._get_msg_contexts(group_id)
         else:  # 随机获取一个群组
             group_list = await self.client.get_group_list()
+            ignore_groups = self.config.get("ignore_groups", [])
             group_ids = [
                 str(group["group_id"])
                 for group in group_list
-                if str(group["group_id"]) not in self.config["ignore_groups"]
+                if str(group["group_id"]) not in ignore_groups
             ]
             if not group_ids:
                 logger.warning("未找到可用群组")
@@ -199,12 +201,13 @@ class LLMAction:
         life_header_text = "\n".join(life_header) + "\n\n"
         
         # 系统提示，要求使用三对双引号包裹正文
+        diary_prompt = self.config.get("diary_prompt", "请写一篇贴近真实生活的日记，包含今天的活动和感受。")
         system_prompt = (
             life_header_text
             + f"# 写作主题：{topic or '从聊天内容中选一个与今天生活相关的主题'}\n\n"
             "# 输出格式要求：\n"
             '- 使用三对双引号（""")将正文内容包裹起来。\n\n'
-            + self.config["diary_prompt"]
+            + diary_prompt
         )
         
         logger.debug(f"{system_prompt}\n\n{contexts}")
@@ -240,8 +243,9 @@ class LLMAction:
             prompt = f"\n[帖子内容]：\n{content}"
 
             logger.debug(prompt)
+            comment_prompt = self.config.get("comment_prompt", "请根据帖子内容生成一条简短的评论。")
             llm_response = await provider.text_chat(
-                system_prompt=self.config["comment_prompt"],
+                system_prompt=comment_prompt,
                 prompt=prompt,
                 image_urls=post.images,
             )
