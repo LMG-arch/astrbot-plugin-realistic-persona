@@ -21,8 +21,9 @@ class LLMAction:
         self.context = context
         self.config = config
         self.client = client
-        self.comment_provider_id = self.config["comment_provider_id"]
-        self.diary_provider_id = self.config["diary_provider_id"]
+        # 使用 get 方法获取可选配置，默认为 None
+        self.comment_provider_id = self.config.get("comment_provider_id")
+        self.diary_provider_id = self.config.get("diary_provider_id")
 
         # ModelScope 生图配置
         self.ms_api_key: str | None = self.config.get("ms_api_key")
@@ -147,10 +148,12 @@ class LLMAction:
 
     async def generate_diary(self, group_id: str = "", topic: str | None = None) -> str | None:
         """根据聊天记录 + 人设 + 当天时间/天气生成日记文本"""
-        provider = (
-            self.context.get_provider_by_id(self.config["diary_provider_id"])
-            or self.context.get_using_provider()
-        )
+        # 如果配置了 diary_provider_id 则使用，否则使用默认提供商
+        provider = None
+        if self.diary_provider_id:
+            provider = self.context.get_provider_by_id(self.diary_provider_id)
+        if not provider:
+            provider = self.context.get_using_provider()
         if not isinstance(provider, Provider):
             logger.error("未配置用于文本生成任务的 LLM 提供商")
             return None
@@ -220,10 +223,12 @@ class LLMAction:
 
     async def generate_comment(self, post: Post) -> str | None:
         """根据帖子内容生成评论"""
-        provider = (
-            self.context.get_provider_by_id(self.config["comment_provider_id"])
-            or self.context.get_using_provider()
-        )
+        # 如果配置了 comment_provider_id 则使用，否则使用默认提供商
+        provider = None
+        if self.comment_provider_id:
+            provider = self.context.get_provider_by_id(self.comment_provider_id)
+        if not provider:
+            provider = self.context.get_using_provider()
         if not isinstance(provider, Provider):
             logger.error("未配置用于文本生成任务的 LLM 提供商")
             return None
@@ -251,10 +256,12 @@ class LLMAction:
 
     async def generate_image_prompt_from_diary(self, diary: str) -> str | None:
         """让大模型根据日记和生活状态生成画图提示词"""
-        provider = (
-            self.context.get_provider_by_id(self.config["diary_provider_id"])
-            or self.context.get_using_provider()
-        )
+        # 如果配置了 diary_provider_id 则使用，否则使用默认提供商
+        provider = None
+        if self.diary_provider_id:
+            provider = self.context.get_provider_by_id(self.diary_provider_id)
+        if not provider:
+            provider = self.context.get_using_provider()
         if not isinstance(provider, Provider):
             logger.error("未配置用于文本生成任务的 LLM 提供商")
             return None
