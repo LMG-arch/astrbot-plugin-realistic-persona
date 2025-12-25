@@ -136,11 +136,17 @@ pip install -r requirements.txt
 - `api_key`: ModelScope API密钥
 - `model`: 使用的模型名称
 - `size`: 默认图片尺寸
+- `image_forbidden_rules`: **绘画禁止规则**（可配置）
+  - 生成图片时的强制约束规则
+  - 会被添加到所有绘画提示词中
+  - 默认：“★★★绝对禁止规则：画面中禁止出现任何男性角色、男生、男人、男孩等。只能有女性主角一人，不要添加其他人物。”
+  - 留空则不添加任何禁止规则
+  - 支持完全自定义，可根据需求设置不同的约束
 
 ### 情绪感知配置
 - `enable_emotion_detection`: 是否启用情绪检测
 - `enable_auto_selfie`: 是否启用自动自拍
-- `selfie_trigger_chance`: 自拍触发概率
+- `selfie_trigger_chance`: 自拍触发概率（默认0.3即30%，建议0.2-0.5）
 
 ### 生活模拟配置
 - `enable_life_simulation`: 是否启用生活模拟
@@ -154,15 +160,17 @@ pip install -r requirements.txt
 
 ### QQ空间配置
 - `enable_qzone`: 是否启用QQ空间功能
-- `publish_times_per_day`: 每天发布次数（默认1次）
+- `publish_times_per_day`: 每天发布次数（默认3次，建议2-5次较为自然）
 - `publish_time_ranges`: 发布时间段列表（默认["9-12", "14-18", "19-22"]）
-- `insomnia_probability`: 失眠发说说概率（0-1之间，默认0.2即20%）
+  - 支持小时范围格式："9-12"、"14-18"
+  - 也支持精确时间格式："20:00-20:20"
+- `insomnia_probability`: 失眠发说说概率（0-1之间，默认0.15即15%，建议0.1-0.3）
 - `diary_max_msg`: 日记最大消息数
 - `diary_user_id`: **优先使用的对话用户ID**
   - 填写QQ号，发说说时优先从该用户的私聊历史生成内容
   - 留空则从群聊读取
   - **配图也会参考该用户的对话历史**，让图文更一致
-- `diary_prompt`: 日记生成提示（可自定义）
+- `diary_prompt`: 日记生成提示（可自定义，默认为口语化、简洁风格）
 - `comment_prompt`: 评论生成提示（可自定义）
 - `schedule_prompt`: 日程生成提示词（可自定义）
 - `news_prompt`: 新闻获取提示词（可自定义）
@@ -382,6 +390,13 @@ pip install -r requirements.txt
     - 新增`diary_user_id`配置项，可指定优先使用的对话用户
     - 所有系统提示词支持配置文件自定义
     - 配置页面可预览当天生成的日程
+- v1.8.2: 绘画禁止规则可配置
+  - **灵活的约束管理**：新增`image_forbidden_rules`配置项
+  - **可自定义规则**：支持在配置文件中设置绘画禁止规则
+  - **统一应用**：所有绘画场景（QQ空间配图、AI工具调用、手动绘图）都使用同一配置
+  - **默认禁止男性**：默认配置为禁止画面中出现男性角色
+  - **支持禁用**：留空则完全不添加任何禁止规则
+  - **无需改代码**：可直接在配置界面修改，重启AstrBot后生效
 
 ## 致谢
 

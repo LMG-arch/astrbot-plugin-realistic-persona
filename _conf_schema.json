@@ -19,7 +19,7 @@
   "api_url": {
     "description": "API基础URL",
     "type": "string",
-    "default": "https://api.modelscope.com/api/",
+    "default": "https://api-inference.modelscope.cn/",
     "hint": "ModelScope API的基础地址"
   },
   "provider": {
@@ -35,6 +35,12 @@
     "default": "1080x1920",
     "options": ["1080x1920", "1920x1080", "1024x1024", "512x512"],
     "labels": ["竖屏(1080x1920)", "横屏(1920x1080)", "方形(1024x1024)", "小方形(512x512)"]
+  },
+  "image_forbidden_rules": {
+    "description": "绘画禁止规则",
+    "type": "text",
+    "default": "★★★绝对禁止规则：画面中禁止出现任何男性角色、男生、男人、男孩等。只能有女性主角一人，不要添加其他人物。",
+    "hint": "生成图片时的强制禁止规则，会被添加到绘画提示词中。留空则不添加任何禁止规则。"
   },
   
   "_section_emotion": {
@@ -60,7 +66,7 @@
     "type": "float",
     "default": 0.3,
     "condition": {"enable_auto_selfie": true},
-    "hint": "当检测到符合条件的情绪时，触发自拍的概率(0-1)"
+    "hint": "当检测到符合条件的情绪时，触发自拍的概率(0-1)，建议0.2-0.5"
   },
   "enable_proactive_messages": {
     "description": "启用主动消息",
@@ -106,6 +112,12 @@
     "condition": {"enable_life_simulation": true},
     "hint": "AI角色的称呼，用于日程生成等场景"
   },
+  "persona_profile": {
+    "description": "插件人设配置",
+    "type": "text",
+    "default": "",
+    "hint": "插件独立的人设设定，优先级高于系统人设。留空则使用系统配置的人设。\n格式示例：你是一个24岁的女生，居住在南京，上海大学计算机科学系大四在读..."
+  },
   "schedule_hour": {
     "description": "日程生成时间(小时)",
     "type": "int",
@@ -134,6 +146,28 @@
     "condition": {"enable_life_simulation": true},
     "hint": "角色感兴趣并会关注的新闻话题。需启用联网工具以获取真实新闻"
   },
+  "schedule_prompt": {
+    "description": "日程生成提示词",
+    "type": "text",
+    "default": "你是{persona_name}，{persona_profile}。\n今天是{today}。\n当地天气：{weather}。\n\n请直接输出今天的详细生活安排：\n\n1. 今日穿搭：根据人设、当地天气和今天的活动，描述具体穿着（上衣、下装、鞋子、外套/配饰等），必须符合天气情况、角色性格和身份\n2. 早上（6:00-9:00）：起床时间、洗漱、早餐、出门准备等具体活动\n3. 上午（9:00-12:00）：主要活动（工作/上课/其他），具体在做什么\n4. 中午（12:00-14:00）：午餐地点和内容、午休安排\n5. 下午（14:00-18:00）：下午的具体安排和活动\n6. 傍晚（18:00-20:00）：晚餐、休闲活动\n7. 晚上（20:00-23:00）：娱乐、学习、社交等活动\n8. 睡前（23:00-24:00）：洗漱、放松、睡觉准备\n\n重要：直接输出日程内容，不要添加任何确认、回复或解释性的话。用口语化表达，贴近真实人类生活，不要提到AI。每个时段1-2句话即可。",
+    "condition": {"enable_life_simulation": true},
+    "hint": "生成日程时的系统提示词。支持变量：{persona_name} {persona_profile} {today} {weather}"
+  },
+  "news_prompt": {
+    "description": "新闻获取提示词",
+    "type": "text",
+    "default": "联网搜索{today}早间新闻，关注{topics}，列出3条标题+简述。",
+    "condition": {"enable_life_simulation": true},
+    "hint": "获取新闻时的系统提示词。支持变量：{today} {topics}"
+  },
+  "today_schedule_display": {
+    "description": "当前日程预览",
+    "type": "text",
+    "default": "未生成日程，请等待系统自动生成或手动触发",
+    "readonly": true,
+    "condition": {"enable_life_simulation": true},
+    "hint": "展示当天已生成的日程安排，此项为只读，仅供预览"
+  },
   
   "_section_qzone": {
     "description": "========== QQ空间功能配置 ==========",
@@ -156,23 +190,23 @@
   "publish_times_per_day": {
     "description": "每天发说说次数",
     "type": "int",
-    "default": 1,
+    "default": 3,
     "condition": {"enable_qzone": true},
-    "hint": "每天自动发布说说的次数，默认1次"
+    "hint": "每天自动发布说说的次数，建议2-5次较为自然"
   },
   "publish_time_ranges": {
     "description": "发说说时间段",
     "type": "list",
     "default": ["9-12", "14-18", "19-22"],
     "condition": {"enable_qzone": true},
-    "hint": "发说说的时间段列表，格式为'9-12'、'14-18'等，系统会在这些时间段内随机选择时间发布"
+    "hint": "发说说的时间段列表，格式为'9-12'、'14-18'等，系统会在这些时间段内随机选择时间发布。也支持精确时间如'20:00-20:20'"
   },
   "insomnia_probability": {
     "description": "失眠发说说概率",
     "type": "float",
-    "default": 0.2,
+    "default": 0.15,
     "condition": {"enable_qzone": true},
-    "hint": "晚上23:00-02:00之间随机发失眠说说的概率（0-1之间），0表示不发，0.2表示20%概率"
+    "hint": "晚上23:00-02:00之间随机发失眠说说的概率（0-1之间），0表示不发，0.15表示15%概率，建议0.1-0.3"
   },
   "diary_max_msg": {
     "description": "日记最大消息数",
@@ -181,17 +215,24 @@
     "condition": {"enable_qzone": true},
     "hint": "生成日记时最多读取的群聊消息条数"
   },
+  "diary_user_id": {
+    "description": "优先使用的对话用户ID",
+    "type": "string",
+    "default": "",
+    "condition": {"enable_qzone": true},
+    "hint": "发说说时优先从这个用户的私聊对话历史生成内容，留空则从群聊读取。格式：QQ号"
+  },
   "diary_prompt": {
     "description": "日记生成提示",
     "type": "text",
-    "default": "",
+    "default": "写作风格：\n- 用口语化、随意的语气，像朋友圈那样轻松\n- 可以包含 Emoji 表情增加生动性\n- 只写 2-3 句话，简洁明了\n- 不要长篇大论，不要流水账式的叙述\n- 可以是分享心情、小感慨、有趣的事、即时感受、思考、或者emo等\n\n示例：\n- “今天天气超好，在公园晒了一下午的太阳🌞”\n- “终于学会了那道难题，感觉自己还是挺聪明的呀😏”\n- “晚风很舒服，散步回家的路上看到了超美的晚霞✨”",
     "condition": {"enable_qzone": true},
-    "hint": "生成QQ空间日记/说说时的补充提示词"
+    "hint": "生成QQ空间日记/说说时的补充提示词，定义写作风格和示例"
   },
   "comment_prompt": {
     "description": "评论生成提示",
     "type": "text",
-    "default": "",
+    "default": "请根据帖子内容生成一条简短的评论。要求：\n- 口语化、自然随意\n- 1句话以内，简洁有趣\n- 可以使用emoji表达情绪\n- 不要太正式或客套",
     "condition": {"enable_qzone": true},
     "hint": "生成评论内容时使用的系统提示"
   },
@@ -253,5 +294,35 @@
     "default": 0.6,
     "condition": {"enable_auto_profile_update": true},
     "hint": "触发更新的情绪强度阈值 (0-1)，越高越不容易触发"
+  },
+  
+  "_section_advanced": {
+    "description": "========== 高级配置 ==========",
+    "type": "string",
+    "invisible": true
+  },
+  "comment_provider_id": {
+    "description": "评论生成LLM提供商ID",
+    "type": "string",
+    "default": "",
+    "hint": "用于生成QQ空间评论的LLM提供商ID，留空则使用默认提供商"
+  },
+  "diary_provider_id": {
+    "description": "日记生成LLM提供商ID",
+    "type": "string",
+    "default": "",
+    "hint": "用于生成日记/说说的LLM提供商ID，留空则使用默认提供商"
+  },
+  "ignore_groups": {
+    "description": "忽略的群组列表",
+    "type": "list",
+    "default": [],
+    "hint": "不从这些群组读取消息生成日记，格式为群号列表"
+  },
+  "pillowmd_style_dir": {
+    "description": "Pillowmd样式目录",
+    "type": "string",
+    "default": "",
+    "hint": "自定义的Pillowmd样式目录路径，留空则使用默认样式"
   }
 }
