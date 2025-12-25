@@ -140,6 +140,9 @@ class Main(Star):
         self.api_url = config.get("api_url", "https://api.modelscope.com/api/")
         self.provider = config.get("provider", "ms")
         
+        # ========== 图像生成检测配置 ==========
+        self.enable_image_generation_detection = config.get("enable_image_generation_detection", True)
+        
         # ========== 情绪感知与事件配置 ==========
         self.enable_emotion_detection = config.get("enable_emotion_detection", True)
         self.enable_auto_selfie = config.get("enable_auto_selfie", False)
@@ -1902,17 +1905,201 @@ class Main(Star):
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, max_delay)
     
+    async def _request_image_with_fallback(self, prompt: str, size: str) -> str:
+        """调用图片生成API，支持多平台和自动切换
+        
+        Args:
+            prompt: 图片生成提示词
+            size: 图片尺寸
+            
+        Returns:
+            图片URL
+            
+        Raises:
+            Exception: 当所有平台都失败时
+        """
+        # 获取配置的主平台和备用平台
+        primary_provider = self.config.get("provider", "ms")
+        backup_providers = self.config.get("backup_providers", ["openai", "aliyun"])
+        
+        # 构建平台列表（主平台优先）
+        all_providers = [primary_provider] + [p for p in backup_providers if p != primary_provider]
+        
+        logger.info(f"[绘图] 尝试平台列表: {all_providers}，主平台: {primary_provider}")
+        
+        last_error = None
+        for provider in all_providers:
+            try:
+                logger.info(f"[绘图] 尝试使用平台: {provider}")
+                
+                if provider.lower() in ["ms", "modelscope"]:
+                    # ModelScope 平台
+                    if not self.api_key:
+                        logger.warning(f"[绘图] {provider} 平台未配置API密钥，跳过")
+                        continue
+                    async with aiohttp.ClientSession() as session:
+                        return await self._request_modelscope(prompt, size, session)
+                elif provider.lower() == "openai":
+                    # OpenAI 平台
+                    openai_api_key = self.config.get("openai_api_key", "")
+                    if not openai_api_key:
+                        logger.warning(f"[绘图] OpenAI 平台未配置API密钥，跳过")
+                        continue
+                    return await self._request_openai_dalle(prompt, size, openai_api_key)
+                elif provider.lower() == "aliyun":
+                    # 阿里云平台
+                    aliyun_api_key = self.config.get("aliyun_api_key", "")
+                    if not aliyun_api_key:
+                        logger.warning(f"[绘图] 阿里云平台未配置API密钥，跳过")
+                        continue
+                    return await self._request_aliyun(prompt, size, aliyun_api_key)
+                else:
+                    logger.warning(f"[绘图] 不支持的平台: {provider}，跳过")
+                    continue
+                    
+            except Exception as e:
+                logger.warning(f"[绘图] {provider} 平台调用失败: {e}")
+                last_error = e
+                continue  # 尝试下一个平台
+        
+        # 如果所有平台都失败了
+        if last_error:
+            logger.error(f"[绘图] 所有绘图平台都失败了，最后错误: {last_error}")
+            raise Exception(f"所有绘图平台都失败了: {last_error}")
+        else:
+            raise Exception("没有配置任何绘图平台")
+    
+    async def _request_openai_dalle(self, prompt: str, size: str, api_key: str) -> str:
+        """调用 OpenAI DALL-E 生成图片"""
+        # 将尺寸转换为 OpenAI 支持的格式
+        # OpenAI DALL-E 支持 256x256, 512x512, 1024x1024
+        # 将其他尺寸映射到最接近的 OpenAI 支持的尺寸
+        if "256" in size:
+            openai_size = "256x256"
+        elif "512" in size:
+            openai_size = "512x512"
+        elif "1024" in size:
+            openai_size = "1024x1024"
+        else:
+            # 默认使用 1024x1024
+            openai_size = "1024x1024"
+        
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        
+        # 构建请求数据
+        payload = {
+            "model": "dall-e-3",  # 或者使用 "dall-e-2"
+            "prompt": prompt,
+            "n": 1,
+            "size": openai_size,
+        }
+        
+        openai_api_url = self.config.get("openai_api_url", "https://api.openai.com/v1")
+        url = f"{openai_api_url}/images/generations"
+        logger.info(f"[OpenAI DALL-E] 请求URL: {url}")
+        logger.info(f"[OpenAI DALL-E] 请求参数: size={openai_size}, prompt={prompt[:50]}...")
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as resp:
+                resp_text = await resp.text()
+                logger.info(f"[OpenAI DALL-E] 响应状态: {resp.status}")
+                logger.info(f"[OpenAI DALL-E] 响应内容: {resp_text[:1000]}...")
+                
+                if resp.status != 200:
+                    logger.error(f"[OpenAI DALL-E] API调用失败: HTTP {resp.status}")
+                    logger.error(f"[OpenAI DALL-E] 错误详情: {resp_text}")
+                    raise Exception(f"OpenAI DALL-E API调用失败: HTTP {resp.status}, {resp_text[:200]}")
+                
+                try:
+                    data = json.loads(resp_text)
+                except json.JSONDecodeError as e:
+                    logger.error(f"[OpenAI DALL-E] 响应解析失败: {e}")
+                    raise Exception(f"OpenAI DALL-E 响应解析失败: {e}")
+        
+        # 从响应中提取图片URL
+        if "data" not in data or not data["data"]:
+            logger.error(f"[OpenAI DALL-E] 未找到图片数据")
+            logger.error(f"[OpenAI DALL-E] 完整响应数据: {json.dumps(data, ensure_ascii=False, indent=2)}")
+            raise Exception("OpenAI DALL-E 未返回图片数据")
+        
+        image_url = data["data"][0].get("url")
+        if not image_url:
+            logger.error(f"[OpenAI DALL-E] 未找到图片URL")
+            logger.error(f"[OpenAI DALL-E] 完整响应数据: {json.dumps(data, ensure_ascii=False, indent=2)}")
+            raise Exception("OpenAI DALL-E 未返回图片 URL")
+        
+        return image_url
+    
+    async def _request_aliyun(self, prompt: str, size: str, api_key: str) -> str:
+        """调用阿里云通义万相生成图片"""
+        # 阿里云支持的尺寸格式，如 "1024*1024"
+        # 将标准格式转换为阿里云格式
+        ali_size = size.replace("x", "*")
+        
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        
+        # 构建请求数据
+        payload = {
+            "model": "wanx-v1",  # 阿里云通义万相模型
+            "input": {
+                "prompt": prompt,
+                "size": ali_size,
+            },
+            "parameters": {
+                "n": 1,
+            }
+        }
+        
+        aliyun_api_url = self.config.get("aliyun_api_url", "https://dashscope.aliyuncs.com/api/v1")
+        url = f"{aliyun_api_url}/services/aigc/text2image"
+        logger.info(f"[阿里云通义万相] 请求URL: {url}")
+        logger.info(f"[阿里云通义万相] 请求参数: size={ali_size}, prompt={prompt[:50]}...")
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as resp:
+                resp_text = await resp.text()
+                logger.info(f"[阿里云通义万相] 响应状态: {resp.status}")
+                logger.info(f"[阿里云通义万相] 响应内容: {resp_text[:1000]}...")
+                
+                if resp.status != 200:
+                    logger.error(f"[阿里云通义万相] API调用失败: HTTP {resp.status}")
+                    logger.error(f"[阿里云通义万相] 错误详情: {resp_text}")
+                    raise Exception(f"阿里云通义万相 API调用失败: HTTP {resp.status}, {resp_text[:200]}")
+                
+                try:
+                    data = json.loads(resp_text)
+                except json.JSONDecodeError as e:
+                    logger.error(f"[阿里云通义万相] 响应解析失败: {e}")
+                    raise Exception(f"阿里云通义万相 响应解析失败: {e}")
+        
+        # 从响应中提取图片URL
+        if "output" not in data or "results" not in data["output"] or not data["output"]["results"]:
+            logger.error(f"[阿里云通义万相] 未找到图片数据")
+            logger.error(f"[阿里云通义万相] 完整响应数据: {json.dumps(data, ensure_ascii=False, indent=2)}")
+            raise Exception("阿里云通义万相 未返回图片数据")
+        
+        image_url = data["output"]["results"][0].get("url")
+        if not image_url:
+            logger.error(f"[阿里云通义万相] 未找到图片URL")
+            logger.error(f"[阿里云通义万相] 完整响应数据: {json.dumps(data, ensure_ascii=False, indent=2)}")
+            raise Exception("阿里云通义万相 未返回图片 URL")
+        
+        return image_url
+    
     async def _request_image(self, prompt: str, size: str) -> str:
         """根据配置的提供商发起请求，返回图片URL"""
         try:
             if not prompt:
                 raise ValueError("请提供提示词！")
             
-            async with aiohttp.ClientSession() as session:
-                if self.provider.lower() in ["ms", "modelscope"]:
-                    return await self._request_modelscope(prompt, size, session)
-                else:
-                    raise ValueError(f"不支持的提供商: {self.provider}")
+            # 使用新的多平台支持方法
+            return await self._request_image_with_fallback(prompt, size)
         
         except aiohttp.ClientError as e:
             raise Exception(f"网络请求失败: {str(e)}")
@@ -1982,7 +2169,8 @@ class Main(Star):
         except Exception as e:
             error_msg = f"生成图片时遇到问题: {str(e)}"
             logger.error(f"[绘图工具] 失败: {error_msg}")
-            # 发送错误信息给用户
+            # 根据用户偏好，多模态响应必须附带文字说明，禁止仅发送图片
+            # 如果图片生成失败，发送错误信息给用户
             await event.send(event.plain_result(error_msg))
             return f"图片生成失败：{str(e)}"
     
@@ -2447,7 +2635,7 @@ class Main(Star):
     
     @filter.on_llm_response()
     async def on_llm_response_handler(self, event: AstrMessageEvent, response_text, *args, **kwargs):
-        """拦截LLM响应，检测并执行工具调用"""
+        """拦截LLM响应，检测并执行工具调用，以及检测未调用的图像生成内容"""
         # 提取文本内容（response_text 可能是 LLMResponse 对象）
         if hasattr(response_text, 'completion_text'):
             text = response_text.completion_text
@@ -2461,20 +2649,137 @@ class Main(Star):
         
         # 检测是否包含工具调用
         tool_call = self.parse_tool_call(text)
-        if not tool_call:
+        if tool_call:
+            logger.info(f"[工具调用] 检测到工具调用: {tool_call}")
+            
+            # 执行工具
+            tool_name = tool_call.pop("tool_name")
+            result = await self.execute_tool_call(tool_name, tool_call)
+            
+            if result:
+                # 成功执行，返回图片URL代替工具调用格式
+                logger.info(f"[工具调用] 已将工具调用格式替换为图片URL")
+                # 返回图片markdown格式
+                return f"![image]({result})"
+            else:
+                # 执行失败，返回提示信息
+                return "抱歉，图片生成失败了😥"
+        
+        # 检测LLM是否生成了图像生成的JSON格式但没有调用绘图工具
+        image_gen_detected = await self._detect_and_handle_image_generation(text, event)
+        if image_gen_detected:
+            # 如果检测到图像生成并已处理，则返回原始文本
             return response_text
         
-        logger.info(f"[工具调用] 检测到工具调用: {tool_call}")
+        return response_text
+    
+    async def _detect_and_handle_image_generation(self, text: str, event: AstrMessageEvent) -> bool:
+        """
+        检测LLM响应中的图像生成内容，并在没有实际调用绘图工具时自动调用绘图工具
         
-        # 执行工具
-        tool_name = tool_call.pop("tool_name")
-        result = await self.execute_tool_call(tool_name, tool_call)
+        Args:
+            text: LLM响应文本
+            event: 消息事件
         
-        if result:
-            # 成功执行，返回图片URL代替工具调用格式
-            logger.info(f"[工具调用] 已将工具调用格式替换为图片URL")
-            # 返回图片markdown格式
-            return f"![image]({result})"
-        else:
-            # 执行失败，返回提示信息
-            return "抱歉，图片生成失败了😥"
+        Returns:
+            bool: 是否检测到并处理了图像生成内容
+        """
+        # 检查是否启用了图像生成检测功能
+        if not self.enable_image_generation_detection:
+            logger.debug("[图像生成检测] 图像生成检测功能已禁用，跳过检测")
+            return False
+        
+        import re
+        import json
+        
+        # 检查文本中是否包含图像生成的JSON格式
+        # 匹配包含generate_image或类似关键词的JSON结构
+        json_pattern = r'(\{[^{}]*(?:generate_image|image|draw|picture|photo|绘画|图片|照片|绘图)[^{}]*\})'
+        matches = re.findall(json_pattern, text, re.IGNORECASE | re.DOTALL)
+        
+        for match in matches:
+            try:
+                # 尝试解析JSON
+                json_obj = json.loads(match)
+                
+                # 检查是否包含图像生成相关的action或function
+                if isinstance(json_obj, dict):
+                    action = json_obj.get('action', '').lower()
+                    if 'generate_image' in action or 'image' in action or 'draw' in action:
+                        logger.info(f"[图像生成检测] 检测到图像生成JSON: {json_obj}")
+                        
+                        # 提取提示词
+                        action_input = json_obj.get('action_input', '')
+                        if action_input:
+                            # 如果action_input是字符串，尝试解析为JSON
+                            if isinstance(action_input, str):
+                                try:
+                                    input_obj = json.loads(action_input)
+                                    prompt = input_obj.get('prompt', input_obj.get('description', ''))
+                                    size = input_obj.get('aspect_ratio', input_obj.get('size', '1080x1920'))
+                                except json.JSONDecodeError:
+                                    # 如果action_input不是JSON，直接作为提示词处理
+                                    prompt = action_input
+                                    size = '1080x1920'
+                            else:
+                                prompt = action_input.get('prompt', action_input.get('description', ''))
+                                size = action_input.get('aspect_ratio', action_input.get('size', '1080x1920'))
+                        else:
+                            # 如果没有action_input，尝试从JSON对象中直接提取
+                            prompt = json_obj.get('prompt', json_obj.get('description', ''))
+                            size = json_obj.get('aspect_ratio', json_obj.get('size', '1080x1920'))
+                        
+                        if prompt:
+                            logger.info(f"[图像生成检测] 提取到提示词: {prompt[:100]}...")
+                            
+                            # 检查是否已经调用了绘图工具（避免重复调用）
+                            # 这里我们直接调用绘图工具
+                            try:
+                                # 调用绘图工具
+                                result = await self.draw(event, prompt, size)
+                                
+                                # 如果成功，记录日志
+                                if '失败' not in result and '错误' not in result:
+                                    logger.info(f"[图像生成检测] 自动调用绘图工具成功")
+                                    return True
+                                else:
+                                    logger.warning(f"[图像生成检测] 自动调用绘图工具失败: {result}")
+                            except Exception as e:
+                                logger.error(f"[图像生成检测] 自动调用绘图工具时出错: {e}")
+                                
+            except json.JSONDecodeError:
+                # 如果不是有效的JSON，继续检查下一个匹配项
+                continue
+        
+        # 检查是否有非JSON格式的图像生成提示词
+        # 检查是否包含提示词关键词但没有实际调用绘图工具
+        image_keywords = ['生成图片', '画一张', '画个', '画一幅', '制作图片', '绘图', '生成图像', '画出来', '图片生成', '图像生成']
+        for keyword in image_keywords:
+            if keyword in text:
+                logger.info(f"[图像生成检测] 检测到图像生成关键词: {keyword}")
+                
+                # 尝试提取提示词内容
+                # 使用正则表达式提取关键词后的描述
+                prompt_pattern = f'{re.escape(keyword)}[：:：:]?\\\\s*([^。！？\n]+)'
+                prompt_match = re.search(prompt_pattern, text, re.DOTALL)
+                if prompt_match:
+                    prompt = prompt_match.group(1).strip()
+                    if prompt:
+                        logger.info(f"[图像生成检测] 提取到非JSON格式提示词: {prompt[:100]}...")
+                        
+                        try:
+                            # 调用绘图工具
+                            result = await self.draw(event, prompt, '1080x1920')
+                            
+                            # 如果成功，记录日志
+                            if '失败' not in result and '错误' not in result:
+                                logger.info(f"[图像生成检测] 自动调用绘图工具成功")
+                                return True
+                            else:
+                                logger.warning(f"[图像生成检测] 自动调用绘图工具失败: {result}")
+                        except Exception as e:
+                            logger.error(f"[图像生成检测] 自动调用绘图工具时出错: {e}")
+        
+        return False
+    
+    # 原有的on_llm_response_handler方法已经存在，我们不需要重复定义

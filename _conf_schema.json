@@ -26,8 +26,38 @@
     "description": "图片生成服务商",
     "type": "string",
     "default": "ms",
-    "options": ["ms", "modelscope"],
-    "labels": ["ModelScope", "ModelScope(完整)"]
+    "options": ["ms", "modelscope", "openai", "aliyun"],
+    "labels": ["ModelScope", "ModelScope(完整)", "OpenAI DALL-E", "阿里云"]
+  },
+  "backup_providers": {
+    "description": "备用图片生成服务商",
+    "type": "list",
+    "default": ["openai", "aliyun"],
+    "hint": "当主服务商不可用时，按顺序尝试这些备用服务商。支持：ms/modelscope/openai/aliyun"
+  },
+  "openai_api_key": {
+    "description": "OpenAI API密钥",
+    "type": "string",
+    "default": "",
+    "hint": "OpenAI账户的API密钥，用于DALL-E绘图功能"
+  },
+  "openai_api_url": {
+    "description": "OpenAI API基础URL",
+    "type": "string",
+    "default": "https://api.openai.com/v1",
+    "hint": "OpenAI API的基础地址，可使用代理服务"
+  },
+  "aliyun_api_key": {
+    "description": "阿里云API密钥",
+    "type": "string",
+    "default": "",
+    "hint": "阿里云通义万相API密钥，用于AI绘图功能"
+  },
+  "aliyun_api_url": {
+    "description": "阿里云API基础URL",
+    "type": "string",
+    "default": "https://dashscope.aliyuncs.com/api/v1",
+    "hint": "阿里云通义万相API的基础地址"
   },
   "size": {
     "description": "默认图片尺寸",
@@ -41,6 +71,12 @@
     "type": "text",
     "default": "★★★绝对禁止规则：画面中禁止出现任何男性角色、男生、男人、男孩等。只能有女性主角一人，不要添加其他人物。",
     "hint": "生成图片时的强制禁止规则，会被添加到绘画提示词中。留空则不添加任何禁止规则。"
+  },
+  "enable_image_generation_detection": {
+    "description": "启用图像生成检测",
+    "type": "bool",
+    "default": true,
+    "hint": "自动检测LLM返回的绘画提示词但没有实际调用绘图工具的情况，并自动调用绘图工具"
   },
   
   "_section_emotion": {
@@ -228,6 +264,25 @@
     "default": 200,
     "condition": {"enable_qzone": true},
     "hint": "生成日记时最多读取的群聊消息条数"
+  },
+  "history_max_rounds": {
+    "description": "对话历史最大轮数",
+    "type": "int",
+    "default": 10,
+    "hint": "在与LLM交互时保留的最大对话轮数，超出部分将被压缩或丢弃以节省token"
+  },
+  "enable_history_compression": {
+    "description": "启用历史对话压缩",
+    "type": "bool",
+    "default": true,
+    "hint": "是否启用对话历史自动压缩功能，将长对话历史精简以节省token"
+  },
+  "history_compression_threshold": {
+    "description": "历史压缩阈值(字符数)",
+    "type": "int",
+    "default": 2000,
+    "condition": {"enable_history_compression": true},
+    "hint": "当对话历史超过此字符数时自动触发压缩机制"
   },
   "diary_user_id": {
     "description": "优先使用的对话用户ID",

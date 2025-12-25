@@ -1,6 +1,6 @@
 name: "astrbot_plugin_realistic_persona"
 author: "LMG-arch"
-desc: "拟人化角色行为系统：整合情绪感知、生活模拟、QQ空间日记、AI配图、异步思考循环、人格演化系统、情绪驱动的自动换头像/昵称/签名、人生故事引擎、独立新闻获取模块等功能，使用系统人设，符合AstrBot开发文档规范。v1.10.0新增独立新闻获取模块，支持多源容错和智能降级"
-version: "1.10.0"
+desc: "拟人化角色行为系统：整合情绪感知、生活模拟、QQ空间日记、AI配图、异步思考循环、人格演化系统、情绪驱动的自动换头像/昵称/签名、人生故事引擎、独立新闻获取模块、图像生成检测功能等功能，使用系统人设，符合AstrBot开发文档规范。v1.11.0新增图像生成检测功能，自动检测并调用绘图工具；v1.10.0新增独立新闻获取模块，支持多源容错和智能降级"
+version: "1.11.0"
 repo: "https://github.com/LMG-arch/astrbot-plugin-realistic-persona.git"
 display_name: "拟人化角色系统"
