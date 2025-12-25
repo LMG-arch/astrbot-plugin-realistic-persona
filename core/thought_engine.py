@@ -102,13 +102,15 @@ class ThoughtEngine:
                 "thought_count_today": 0,
             }, ensure_ascii=False, indent=2), encoding='utf-8')
     
-    async def generate_thought(self, weather: Optional[str] = None, current_time: Optional[datetime] = None) -> Optional[str]:
+    async def generate_thought(self, llm_action, weather: Optional[str] = None, current_time: Optional[datetime] = None, persona_profile: str = "") -> Optional[str]:
         """
-        生成一条思考/内心独白
+        使用大模型生成一条思考/内心独白
         
         Args:
+            llm_action: LLM动作实例，用于调用大模型
             weather: 当前天气
             current_time: 当前时间
+            persona_profile: 人格描述，用于指导大模型生成符合人设的思考
         
         Returns:
             生成的思考内容
@@ -117,8 +119,49 @@ class ThoughtEngine:
             if current_time is None:
                 current_time = datetime.now()
             
-            # 根据时间段选择思考主题
+            # 构建提示词，让大模型生成符合人设的思考
+            time_info = ""
             hour = current_time.hour
+            if 6 <= hour < 12:
+                time_info = "清晨/上午"
+            elif 12 <= hour < 18:
+                time_info = "下午"
+            elif 18 <= hour < 23:
+                time_info = "傍晚/晚上"
+            else:
+                time_info = "深夜/凌晨"
+            
+            weather_info = f"，天气：{weather}" if weather else ""
+            
+            prompt = f"""你是{persona_profile if persona_profile else '一个有思考能力的人'}。现在是{current_time.strftime('%Y年%m月%d日 %H:%M')}，{time_info}{weather_info}。
+
+请生成一段内心独白或思考，可以是对当前时间、天气的感受，对生活的思考，或者任何符合当前情境的想法。要求：
+1. 内容真实自然，像真人内心独白
+2. 长度在15-50字之间
+3. 体现当前的时间和天气情境
+4. 符合你的人设特点
+
+内心独白："""
+            
+            logger.info(f"[思考引擎] 向LLM请求生成思考，提示词: {prompt[:100]}...")
+            
+            # 使用LLM生成思考
+            if llm_action:
+                thought = await llm_action.generate_thought(prompt)
+                if thought:
+                    # 记录思考
+                    self._save_thought(thought, current_time)
+                    
+                    logger.info(f"[思考引擎] LLM生成思考: {thought}")
+                    
+                    return thought
+                else:
+                    logger.warning("[思考引擎] LLM未能生成思考，使用备用方案")
+            
+            # 如果LLM不可用或生成失败，使用备用方案
+            logger.debug("[思考引擎] 使用备用思考生成方案")
+            
+            # 根据时间段选择思考主题
             if 6 <= hour < 12:
                 time_key = "morning"
             elif 12 <= hour < 18:

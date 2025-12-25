@@ -613,8 +613,8 @@ class LLMAction:
 
     async def generate_diary(self, group_id: str = "", topic: str | None = None, persona_profile: str = "", user_id: str = "") -> str | None:
         """
-        根据聊天记录 + 人设 + 当天时间/天气生成日记文本
-        
+        根据聊天记录 + 人设 + 当天时间/天气/日程生成日记文本
+            
         Args:
             group_id: 群号，留空则随机选一个群
             topic: 主题，留空则由LLM自己选择
@@ -631,18 +631,18 @@ class LLMAction:
             logger.error("未配置用于文本生成任务的 LLM 提供商")
             return None
         contexts = []
-
+    
         # 优先从指定用户的私聊获取对话历史
         if user_id and user_id.strip():
             logger.info(f"优先从用户 {user_id} 的私聊历史生成说说")
             diary_max_msg = self.config.get("diary_max_msg", 100)
             contexts = await self._get_private_msg_contexts(user_id, max_count=diary_max_msg)
-            
+                
             if not contexts:
                 logger.warning(f"无法从用户 {user_id} 获取私聊历史，回退到群聊模式")
             else:
                 logger.info(f"成功从用户 {user_id} 获取了 {len(contexts)} 条对话")
-        
+            
         # 如果没有指定用户或私聊历史为空，则从群聊获取
         if not contexts:
             if group_id:
@@ -660,7 +660,7 @@ class LLMAction:
                     return None
                 contexts = await self._get_msg_contexts(random.choice(group_ids))
         # TODO: 更多模式
-        
+            
         # 人设：优先使用传入的参数，其次从系统获取
         if not persona_profile or not persona_profile.strip():
             try:
@@ -673,7 +673,21 @@ class LLMAction:
         today_str = now.strftime("%Y-%m-%d")
         weekday = "一二三四五六日"[now.weekday()]
         weather_desc = await self._get_weather_desc()
-        
+            
+        # 获取当天的日程安排
+        schedule_text = ""
+        try:
+            from .local_data_manager import LocalDataManager
+            data_dir = self.context.get_data_dir("astrbot_plugin_realistic_persona") / "local_data"
+            data_mgr = LocalDataManager(data_dir)
+            schedule_text = data_mgr.get_schedule_data(today_str)
+            if schedule_text:
+                logger.info(f"获取到当天日程安排")
+            else:
+                logger.info(f"未找到当天日程安排")
+        except Exception as e:
+            logger.warning(f"获取日程安排失败: {e}")
+            
         life_header = [
             f"今天是 {today_str}（星期{weekday}）。",
             "你要以第一人称写一条简短的 QQ 空间说说，分享今天的某个生活片段或感受。",
@@ -685,8 +699,11 @@ class LLMAction:
             life_header.append(f"以下是你的角色设定，请保持一致：{persona_profile}")
         if weather_desc:
             life_header.append(f"你所在城市的天气概况：{weather_desc}")
+        if schedule_text:
+            life_header.append(f"你今天的日程安排：{schedule_text[:300]}...")  # 限制长度避免提示词过长
+            life_header.append("请结合今天的日程安排和对话历史，生成相关的感慨或事件，不要直接复制对话内容，而是根据对话历史和日程安排生成相关的感受或经历。")
         life_header_text = "\n".join(life_header) + "\n\n"
-        
+            
         # 系统提示，要求使用三对双引号包裹正文
         diary_prompt = self.config.get(
             "diary_prompt", 
@@ -703,19 +720,19 @@ class LLMAction:
         )
         system_prompt = (
             life_header_text
-            + f"# 写作主题：{topic or '从聊天内容中选一个与今天生活相关的主题'}\n\n"
+            + f"# 写作主题：{topic or '从聊天内容和今日日程中选一个与今天生活相关的主题'}\n\n"
             "# 输出格式要求：\n"
-            '- 使用三对双引号（""")将正文内容包裹起来。\n\n'
+            '- 使用三对双引号（"""）将正文内容包裹起来。\n\n'
             + diary_prompt
         )
-        
+            
         logger.debug(f"{system_prompt}\n\n{contexts}")
-
+    
         try:
             # 应用历史压缩
             compressed_contexts = await self._compress_contexts(contexts)
             logger.debug(f"[历史压缩] 压缩前: {len(contexts)} 轮对话, 压缩后: {len(compressed_contexts)} 轮对话")
-            
+                
             llm_response = await provider.text_chat(
                 system_prompt=system_prompt,
                 contexts=compressed_contexts,  # 使用压缩后的上下文
@@ -723,7 +740,7 @@ class LLMAction:
             diary = self.extract_content(llm_response.completion_text)
             logger.info(f"LLM 生成的日记：{diary}")
             return diary
-
+    
         except Exception as e:
             raise ValueError(f"LLM 调用失败：{e}")
 
@@ -760,6 +777,47 @@ class LLMAction:
 
         except Exception as e:
             raise ValueError(f"LLM 调用失败：{e}")
+
+    async def generate_thought(self, prompt: str) -> str | None:
+        """让大模型根据提示生成一段思考或内心独白
+        
+        Args:
+            prompt: 生成思考的提示词
+        """
+        # 如果配置了 diary_provider_id 则使用，否则使用默认提供商
+        provider = None
+        if self.diary_provider_id:
+            provider = self.context.get_provider_by_id(self.diary_provider_id)
+        if not provider:
+            provider = self.context.get_using_provider()
+        if not isinstance(provider, Provider):
+            logger.error("未配置用于文本生成任务的 LLM 提供商")
+            return None
+        
+        try:
+            logger.debug(f"[思考生成] 请求提示: {prompt}")
+            
+            llm_response = await provider.text_chat(
+                system_prompt="你是一个善于思考的助手。请根据给定的情境生成一段自然、真实的内心独白或思考。要求：1. 内容真实自然，像真人内心独白；2. 长度在15-50字之间；3. 体现给定情境的特点；4. 直接返回思考内容，不要添加其他解释或说明。",
+                prompt=prompt,
+            )
+            thought = (llm_response.completion_text or "").strip()
+            
+            # 清理返回的内容，只保留思考部分
+            # 如果包含多余的解释，只取第一行或去除多余的字符
+            lines = thought.split('\n')
+            thought = lines[0].strip()  # 取第一行
+            
+            # 去除可能的引号
+            if thought.startswith('"') and thought.endswith('"'):
+                thought = thought[1:-1]
+            
+            logger.info(f"[思考生成] 生成的思考：{thought}")
+            return thought
+        
+        except Exception as e:
+            logger.error(f"[思考生成] LLM调用失败：{e}")
+            return None
 
     async def generate_nickname(self, prompt: str) -> str | None:
         """让大模型根据提示生成一个合适的昵称
@@ -890,6 +948,42 @@ class LLMAction:
         
         if weather_desc:
             system_prompt.append(f"天气情况：{weather_desc}。可以考虑天气对场景的影响。")
+        
+        # 如果有日程信息，也加入参考
+        if schedule_text:
+            # 提取当前时间可能对应的活动
+            current_hour = now.hour
+            schedule_lines = schedule_text.split('\n')
+            current_activity = None
+            
+            # 根据当前小时匹配日程中的活动
+            for line in schedule_lines:
+                if current_hour >= 6 and current_hour < 9 and ('早上' in line or '早餐' in line or '起床' in line):
+                    current_activity = line
+                    break
+                elif current_hour >= 9 and current_hour < 12 and ('上午' in line or '工作' in line or '上课' in line or '学习' in line):
+                    current_activity = line
+                    break
+                elif current_hour >= 12 and current_hour < 14 and ('中午' in line or '午餐' in line or '午休' in line):
+                    current_activity = line
+                    break
+                elif current_hour >= 14 and current_hour < 18 and ('下午' in line or '下午' in line or '工作' in line or '学习' in line):
+                    current_activity = line
+                    break
+                elif current_hour >= 18 and current_hour < 20 and ('傍晚' in line or '晚餐' in line or '晚上' in line):
+                    current_activity = line
+                    break
+                elif current_hour >= 20 and current_hour < 23 and ('晚上' in line or '娱乐' in line or '学习' in line or '社交' in line):
+                    current_activity = line
+                    break
+                elif current_hour >= 23 or current_hour < 6 and ('睡前' in line or '睡觉' in line or '洗漱' in line):
+                    current_activity = line
+                    break
+            
+            if current_activity:
+                system_prompt.append(f"当前时间 {current_hour}:00 左右的活动安排：{current_activity}。请根据当前时间段的活动安排生成符合场景的图片。")
+            else:
+                system_prompt.append(f"今天的日程安排：{schedule_text[:200]}...。请根据日记内容和日程安排生成符合场景的图片。")
         
         # 如果有对话历史，提示大模型参考
         if contexts:

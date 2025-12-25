@@ -18,18 +18,22 @@ from .experience_bank import ExperienceBank
 class AsyncThinkingScheduler:
     """异步思考循环调度器"""
     
-    def __init__(self, thought_engine: ThoughtEngine, experience_bank: ExperienceBank, on_weather_changed: Optional[Callable] = None):
+    def __init__(self, thought_engine: ThoughtEngine, experience_bank: ExperienceBank, llm_action=None, on_weather_changed: Optional[Callable] = None, persona_profile: str = ""):
         """
         初始化调度器
         
         Args:
             thought_engine: 思考引擎实例
             experience_bank: 经历银行实例
+            llm_action: LLM动作实例，用于大模型思考
             on_weather_changed: 天气变化时的回调函数
+            persona_profile: 人格描述，用于指导大模型生成符合人设的思考
         """
         # 使用传入的引擎实例
         self.thought_engine = thought_engine
         self.experience_bank = experience_bank
+        self.llm_action = llm_action
+        self.persona_profile = persona_profile
         
         # 调度器
         self.scheduler = AsyncIOScheduler()
@@ -104,8 +108,10 @@ class AsyncThinkingScheduler:
         try:
             logger.info("[异步思考] 触发定期思考")
             thought = await self.thought_engine.generate_thought(
+                llm_action=self.llm_action,
                 weather=self.current_weather,
-                current_time=datetime.now()
+                current_time=datetime.now(),
+                persona_profile=self.persona_profile
             )
             
             if thought:

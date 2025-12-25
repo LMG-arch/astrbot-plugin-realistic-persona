@@ -2692,19 +2692,26 @@ class Main(Star):
         import re
         import json
         
+        logger.info(f"[图像生成检测] 检测响应文本: {text[:200]}...")
+        
         # 检查文本中是否包含图像生成的JSON格式
         # 匹配包含generate_image或类似关键词的JSON结构
         json_pattern = r'(\{[^{}]*(?:generate_image|image|draw|picture|photo|绘画|图片|照片|绘图)[^{}]*\})'
         matches = re.findall(json_pattern, text, re.IGNORECASE | re.DOTALL)
+        
+        logger.info(f"[图像生成检测] 找到 {len(matches)} 个JSON匹配项")
         
         for match in matches:
             try:
                 # 尝试解析JSON
                 json_obj = json.loads(match)
                 
+                logger.info(f"[图像生成检测] 解析JSON: {json_obj}")
+                
                 # 检查是否包含图像生成相关的action或function
                 if isinstance(json_obj, dict):
                     action = json_obj.get('action', '').lower()
+                    logger.info(f"[图像生成检测] 检查动作: {action}")
                     if 'generate_image' in action or 'image' in action or 'draw' in action:
                         logger.info(f"[图像生成检测] 检测到图像生成JSON: {json_obj}")
                         
@@ -2739,16 +2746,17 @@ class Main(Star):
                                 result = await self.draw(event, prompt, size)
                                 
                                 # 如果成功，记录日志
-                                if '失败' not in result and '错误' not in result:
+                                if result and '失败' not in result and '错误' not in result:
                                     logger.info(f"[图像生成检测] 自动调用绘图工具成功")
                                     return True
                                 else:
                                     logger.warning(f"[图像生成检测] 自动调用绘图工具失败: {result}")
                             except Exception as e:
-                                logger.error(f"[图像生成检测] 自动调用绘图工具时出错: {e}")
+                                logger.error(f"[图像生成检测] 自动调用绘图工具时出错: {e}", exc_info=True)
                                 
             except json.JSONDecodeError:
                 # 如果不是有效的JSON，继续检查下一个匹配项
+                logger.warning(f"[图像生成检测] JSON解析失败: {match[:100]}...")
                 continue
         
         # 检查是否有非JSON格式的图像生成提示词
@@ -2772,13 +2780,56 @@ class Main(Star):
                             result = await self.draw(event, prompt, '1080x1920')
                             
                             # 如果成功，记录日志
-                            if '失败' not in result and '错误' not in result:
+                            if result and '失败' not in result and '错误' not in result:
                                 logger.info(f"[图像生成检测] 自动调用绘图工具成功")
                                 return True
                             else:
                                 logger.warning(f"[图像生成检测] 自动调用绘图工具失败: {result}")
                         except Exception as e:
-                            logger.error(f"[图像生成检测] 自动调用绘图工具时出错: {e}")
+                            logger.error(f"[图像生成检测] 自动调用绘图工具时出错: {e}", exc_info=True)
+        
+        # 额外检测您提到的格式：{ "action": "generate_image", "action_input": "..." }
+        # 检测多行JSON格式
+        multiline_json_pattern = r'\{\s*\["\']action\["\']\s*:\s*\["\']generate_image\["\'].*?\}'
+        multiline_matches = re.findall(multiline_json_pattern, text, re.IGNORECASE | re.DOTALL)
+        
+        logger.info(f"[图像生成检测] 找到 {len(multiline_matches)} 个多行JSON匹配项")
+        
+        for match in multiline_matches:
+            try:
+                json_obj = json.loads(match)
+                logger.info(f"[图像生成检测] 解析多行JSON: {json_obj}")
+                
+                if isinstance(json_obj, dict):
+                    action = json_obj.get('action', '').lower()
+                    if 'generate_image' in action:
+                        action_input = json_obj.get('action_input', '')
+                        if isinstance(action_input, str):
+                            try:
+                                input_obj = json.loads(action_input)
+                                prompt = input_obj.get('prompt', input_obj.get('description', ''))
+                                size = input_obj.get('aspect_ratio', input_obj.get('size', '1080x1920'))
+                            except json.JSONDecodeError:
+                                prompt = action_input
+                                size = '1080x1920'
+                        else:
+                            prompt = action_input.get('prompt', action_input.get('description', ''))
+                            size = action_input.get('aspect_ratio', action_input.get('size', '1080x1920'))
+                        
+                        if prompt:
+                            logger.info(f"[图像生成检测] 从多行JSON提取到提示词: {prompt[:100]}...")
+                            try:
+                                result = await self.draw(event, prompt, size)
+                                if result and '失败' not in result and '错误' not in result:
+                                    logger.info(f"[图像生成检测] 自动调用绘图工具成功")
+                                    return True
+                                else:
+                                    logger.warning(f"[图像生成检测] 自动调用绘图工具失败: {result}")
+                            except Exception as e:
+                                logger.error(f"[图像生成检测] 自动调用绘图工具时出错: {e}", exc_info=True)
+            except json.JSONDecodeError:
+                logger.warning(f"[图像生成检测] 多行JSON解析失败: {match[:100]}...")
+                continue
         
         return False
     
