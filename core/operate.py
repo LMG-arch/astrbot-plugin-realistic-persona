@@ -329,16 +329,20 @@ class PostOperator:
                         user_id=user_id
                     )
                     if img_prompt:
-                        img_url = await self.llm._request_modelscope(img_prompt)
+                        img_url = await self.llm._request_image_with_fallback(img_prompt)
                         images = [img_url]
                         
                         # 如果没有文字内容，但有图片，可以使用日记内容作为文字
                         if not text and diary_for_image:
                             text = diary_for_image
                 except Exception as e:
-                    logger.error(f"LLM/ModelScope 生成配图失败：{e}", exc_info=True)
-                    # 记录错误但继续执行，因为可能网络或其他临时问题
-                    logger.warning("配图生成失败，但将继续处理")
+                    logger.error(f"LLM/图片生成失败：{e}", exc_info=True)
+                    # 根据用户偏好，如果llm_images=True但图片生成失败，则不发布纯文本
+                    if llm_images:
+                        logger.warning("根据用户偏好，图片生成失败，将不发布说说")
+                        return  # 直接返回，不发布说说
+                    else:
+                        logger.warning("图片生成失败，但llm_images=False，将继续发布")
 
         if not post:
             uin = event.get_self_id() if event else self.uin
@@ -423,14 +427,24 @@ class PostOperator:
         """自动回复自己说说下的评论"""
         try:
             # 检查 Qzone 连接是否正常
-            if not self.qzone or not self.qzone.ctx:
-                logger.warning("[自动回复] Qzone 未连接或 ctx 为 None，跳过自动回复")
+            if not self.qzone:
+                logger.warning("[自动回复] Qzone 对象未初始化，跳过自动回复")
+                return
+            
+            # 检查 ctx 是否存在
+            if not hasattr(self.qzone, 'ctx') or not self.qzone.ctx:
+                logger.warning("[自动回复] Qzone.ctx 未连接或为 None，跳过自动回复")
+                return
+            
+            # 检查 ctx.uin 是否存在
+            if not hasattr(self.qzone.ctx, 'uin') or not self.qzone.ctx.uin:
+                logger.warning("[自动回复] Qzone.ctx.uin 未初始化，跳过自动回复")
                 return
             
             # 获取bot自己的说说列表
             succ, data = await self.qzone.get_feeds(
                 target_id=str(self.qzone.ctx.uin),  # 获取自己的说说
-                pos=1,
+                pos=0,  # 从第0条开始，而不是1
                 num=10  # 检查最近10条说说
             )
             if not succ:
@@ -440,7 +454,7 @@ class PostOperator:
             bot_uin = str(self.qzone.ctx.uin)
             
             for post in data:
-                if not post.tid:  # 确保说说ID存在
+                if not post or not post.tid:  # 确保说说对象和ID存在
                     continue
                 
                 # 确认是bot自己的说说
@@ -450,6 +464,9 @@ class PostOperator:
                 
                 # 获取说说的详细信息(包含完整评论)
                 detail = await self.qzone.get_detail(post)
+                if not detail:
+                    logger.warning(f"[自动回复] 无法获取说说详情: {post.tid}")
+                    continue
                 
                 # 检查是否有新评论（未回复的）
                 for comment in detail.comments:

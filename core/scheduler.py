@@ -168,6 +168,21 @@ class AutoPublish:
     async def _check_and_reply_comments(self):
         """检查并回复评论"""
         try:
+            # 检查operator是否正确初始化
+            if not self.operator:
+                logger.warning("[SCHEDULER] operator 未初始化，跳过评论检查")
+                return
+            
+            # 检查operator中的qzone是否可用
+            if not hasattr(self.operator, 'qzone') or not self.operator.qzone:
+                logger.warning("[SCHEDULER] operator.qzone 未初始化，跳过评论检查")
+                return
+            
+            # 检查qzone.ctx是否可用
+            if not hasattr(self.operator.qzone, 'ctx') or not self.operator.qzone.ctx:
+                logger.warning("[SCHEDULER] operator.qzone.ctx 未初始化，跳过评论检查")
+                return
+            
             logger.debug("[SCHEDULER] 开始检查新评论并回复")
             await self.operator.auto_reply_to_comments()
             logger.debug("[SCHEDULER] 评论检查和回复完成")
