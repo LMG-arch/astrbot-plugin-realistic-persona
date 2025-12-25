@@ -507,6 +507,8 @@ class PostOperator:
                         
                         if reply_ok:
                             logger.info(f"[自动回复] 成功回复评论 from {comment.nickname}: {reply_text[:50]}...")
+                            # 只回复一次后就跳出，避免重复处理同一条评论
+                            break
                         else:
                             logger.error(f"[自动回复] 回复评论失败: {result}")
                     
