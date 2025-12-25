@@ -779,6 +779,57 @@ class Main(Star):
         """LLM 请求前处理：注入情绪信息与"生活模拟"上下文"""
         analysis: Optional[Dict] = None
         
+        # 在每次对话前注入当前时间信息
+        try:
+            now = datetime.now()
+            time_str = now.strftime("%Y年%m月%d日 %H:%M:%S")
+            time_info = f"[当前时间：{time_str}]"
+            
+            if hasattr(request, "system_prompt"):
+                if request.system_prompt:
+                    request.system_prompt = time_info + "\n" + request.system_prompt
+                else:
+                    request.system_prompt = time_info
+            logger.debug(f"[时间信息] 已注入时间: {time_str}")
+        except Exception as e:
+            logger.debug(f"[时间信息] 注入失败: {e}")
+        
+        # 为历史消息注入时间戳，让LLM知道上一次对话距离现在的时间间隔
+        try:
+            if hasattr(request, 'messages') and request.messages:
+                now = datetime.now()
+                current_timestamp = now.timestamp()
+                
+                # 遍历消息历史，为每条消息添加时间戳信息
+                for i, msg in enumerate(request.messages):
+                    if isinstance(msg, dict) and 'content' in msg:
+                        # 如果消息中没有时间信息，尝试添加
+                        if 'time_info' not in msg:
+                            # 计算该消息距离现在的时间差
+                            msg_timestamp = msg.get('timestamp', current_timestamp)
+                            time_diff_seconds = int(current_timestamp - msg_timestamp)
+                            
+                            # 转换为易读的时间差格式
+                            if time_diff_seconds < 60:
+                                time_diff_str = f"{time_diff_seconds}秒前"
+                            elif time_diff_seconds < 3600:
+                                time_diff_str = f"{time_diff_seconds // 60}分钟前"
+                            elif time_diff_seconds < 86400:
+                                time_diff_str = f"{time_diff_seconds // 3600}小时前"
+                            else:
+                                time_diff_str = f"{time_diff_seconds // 86400}天前"
+                            
+                            # 为消息内容添加时间戳标记
+                            if msg['role'] == 'user':
+                                msg['content'] = f"[用户说话时间: {time_diff_str}]\n{msg['content']}"
+                            elif msg['role'] == 'assistant':
+                                msg['content'] = f"[我的回复时间: {time_diff_str}]\n{msg['content']}"
+                
+                logger.debug(f"[历史消息] 已为 {len(request.messages)} 条消息注入时间戳")
+        except Exception as e:
+            logger.debug(f"[历史消息时间戳] 处理失败: {e}")
+        
+        
         # 人生故事引擎：自动更新经历线并注入上下文
         if self.enable_async_thinking and self.life_story_engine:
             try:
