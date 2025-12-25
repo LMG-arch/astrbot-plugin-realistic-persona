@@ -268,15 +268,21 @@ class Main(Star):
     
     async def initialize_qzone(self, wait_ws_connected: bool = False):
         """初始化QQ空间相关模块"""
+        logger.info(f"[QQ空间] 开始初始化, wait_ws_connected={wait_ws_connected}")
+        
         if not QZONE_AVAILABLE:
+            logger.warning("[QQ空间] QZONE_AVAILABLE=False, 模块不可用")
             return
-                
+        
+        logger.info("[QQ空间] 查找 aiocqhttp 客户端...")
         client = None
         for inst in self.context.platform_manager.platform_insts:
             if isinstance(inst, AiocqhttpAdapter):
                 if client := inst.get_client():
+                    logger.info(f"[QQ空间] 找到 aiocqhttp 客户端: {type(inst).__name__}")
                     break
         if not client:
+            logger.warning("[QQ空间] 未找到 aiocqhttp 客户端，初始化终止")
             return
             
         # 等待 ws 连接完成
@@ -293,19 +299,24 @@ class Main(Star):
                 logger.warning("等待 aiocqhttp WebSocket 连接超时")
             
         # 加载QQ空间模块
+        logger.info("[QQ空间] 创建Qzone对象...")
         self.qzone = Qzone(client)
+        logger.info("[QQ空间] Qzone对象创建完成")
                 
         # llm内容生成器
+        logger.info("[QQ空间] 创建LLMAction对象...")
         self.llm = LLMAction(self.context, self.config, client)  # type: ignore[arg-type]
+        logger.info("[QQ空间] LLMAction对象创建完成")
                 
         # 输出配置信息
         enable_qzone = self.config.get("enable_qzone", False)
         publish_times = self.config.get("publish_times_per_day", 0)
         insomnia_prob = self.config.get("insomnia_probability", 0)
-        logger.info(f"QQ空间配置: enable_qzone={enable_qzone}, publish_times_per_day={publish_times}, insomnia_probability={insomnia_prob}")
+        logger.info(f"[QQ空间] 配置: enable_qzone={enable_qzone}, publish_times_per_day={publish_times}, insomnia_probability={insomnia_prob}")
                 
         # 加载自动发说说模块
         if self.config.get("enable_qzone") and (self.config.get("publish_times_per_day", 0) > 0 or self.config.get("insomnia_probability", 0) > 0):
+            logger.info("[QQ空间] 创建PostOperator和AutoPublish...")
             # 注意：这里只需要简化的发布功能，不需要完整的PostOperator
             from .core.scheduler import AutoPublish
             # 创建简化的operator用于自动发布
@@ -314,14 +325,19 @@ class Main(Star):
                 self.context, self.config, self.qzone, None, self.llm, self.style  # type: ignore[arg-type]
             )
             self.auto_publish = AutoPublish(self.context, self.config, self.operator)  # type: ignore[arg-type]
+            logger.info("[QQ空间] PostOperator和AutoPublish创建完成")
+        else:
+            logger.info("[QQ空间] 未启用自动发说说（publish_times_per_day=0 且 insomnia_probability=0）")
         
         # 初始化个人资料管理器
         if self.config.get("enable_auto_profile_update", False):
+            logger.info("[QQ空间] 创建ProfileManager...")
             profile_dir = StarTools.get_data_dir("astrbot_plugin_realistic_persona") / "profile"
             self.profile_manager = ProfileManager(self.context, self.config, profile_dir)
-            logger.info("个人资料管理器已启用")
+            logger.info("[QQ空间] 个人资料管理器已启用")
                 
-        logger.info("QQ空间自动发说说模块加载完毕！")
+        logger.info("[QQ空间] 初始化完成！")
+        logger.info(f"[QQ空间] 组件状态: qzone={'OK' if hasattr(self, 'qzone') else 'MISSING'}, llm={'OK' if hasattr(self, 'llm') else 'MISSING'}, operator={'OK' if hasattr(self, 'operator') else 'MISSING'}")
     
     # ========== 事件处理器注册 ==========
     
@@ -1410,7 +1426,7 @@ class Main(Star):
         # 检查模块是否初始化完成
         if not hasattr(self, 'operator'):
             await event.send(event.plain_result("QQ空间模块初始化中，请稍后重试"))
-            logger.warning("发说说命令被调用，但QQ空间模块尚未初始化完成")
+            logger.warning(f"[发说说] 命令被调用，但QQ空间模块尚未初始化完成 - operator={'MISSING' if not hasattr(self, 'operator') else 'OK'}, llm={'MISSING' if not hasattr(self, 'llm') else 'OK'}")
             return
         
         from .core.utils import get_image_urls
@@ -1430,7 +1446,7 @@ class Main(Star):
         # 检查模块是否初始化完成
         if not hasattr(self, 'llm') or not hasattr(self, 'operator'):
             await event.send(event.plain_result("QQ空间模块初始化中，请稍后重试"))
-            logger.warning("写说说命令被调用，但QQ空间模块尚未初始化完成")
+            logger.warning(f"[写说说] 命令被调用，但QQ空间模块尚未初始化完成 - operator={'MISSING' if not hasattr(self, 'operator') else 'OK'}, llm={'MISSING' if not hasattr(self, 'llm') else 'OK'}")
             return
         
         from .core.utils import get_image_urls
