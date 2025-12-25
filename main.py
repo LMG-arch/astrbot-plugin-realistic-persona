@@ -1308,11 +1308,37 @@ class Main(Star):
         try:
             logger.info(f"[主动消息] 准备发送到会话 {session_id}: {message[:50]}...")
             
-            # 这里需要根据平台类型发送消息
-            # 目前先记录日志，实际发送需要平台特定的API
-            # TODO: 实现实际的消息发送逻辑
-            logger.warning("[主动消息] 发送功能尚未完全实现，需要平台API支持")
+            # 从上下文数据中获取必要信息
+            user_id = context_data.get("user_id", session_id)  # 如果没有user_id，使用session_id
+            platform = context_data.get("platform", "unknown")
             
+            if not user_id:
+                logger.warning(f"[主动消息] 缺少user_id，无法发送")
+                return
+            
+            logger.info(f"[主动消息] 触发 - 会话: {session_id}, 用户: {user_id}, 平台: {platform}")
+            logger.info(f"[主动消息] 内容: {message}")
+            
+            # 尝试通过平台适配器发送消息
+            try:
+                # 获取平台适配器
+                adapter = self.context.platform_adapter
+                if adapter and hasattr(adapter, 'send_message'):
+                    # 发送消息到指定用户
+                    await adapter.send_message(
+                        target_id=user_id,
+                        message=message,
+                        message_type="private"  # 私聊
+                    )
+                    logger.info(f"[主动消息] 已发送到用户 {user_id}")
+                    return
+                else:
+                    logger.warning(f"[主动消息] 平台适配器不可用或不支持发送消息")
+            
+            except Exception as e:
+                logger.debug(f"[主动消息] 通过适配器发送失败: {e}")
+                logger.warning(f"[主动消息] 消息已生成但未能发送: {message[:50]}...")
+                
         except Exception as e:
             logger.error(f"[主动消息] 发送失败: {e}", exc_info=True)
     
