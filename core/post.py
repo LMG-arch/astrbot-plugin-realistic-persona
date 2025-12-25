@@ -9,6 +9,7 @@ from pathlib import Path
 import aiosqlite
 import pydantic
 
+from astrbot.api import logger
 from astrbot.core.star.star_tools import StarTools
 
 from .comment import Comment
@@ -146,6 +147,11 @@ class Post(pydantic.BaseModel):
                 raise AttributeError(f"Post 对象没有属性 {key}")
 
     async def save(self, db: "PostDB") -> int:
+        # 如果 db 为 None，跳过数据库保存（用于不需要数据库的场景）
+        if db is None:
+            logger.warning("数据库未初始化，跳过保存操作")
+            return -1
+        
         # 1. tid 已存在 → 更新
         if self.tid and self.tid.strip():
             old = await db.get(key="tid", value=self.tid)
