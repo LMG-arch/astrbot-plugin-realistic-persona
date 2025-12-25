@@ -50,6 +50,7 @@ from .core.psychology_engine import PsychologyEngine
 from .core.memory_manager import MemoryManager
 from .core.timeline_verifier import TimelineVerifier
 from .core.profile_manager import ProfileManager
+from .core.personality_evolution import PersonalityEvolutionManager
 
 # 导入QQ空间核心模块（如果可用）
 try:
@@ -142,6 +143,7 @@ class Main(Star):
         self.memory_manager = None
         self.timeline_verifier = None
         self.profile_manager = None  # 个人资料管理器
+        self.personality_evolution = None  # 人格演化管理器
         
         if self.enable_async_thinking:
             thought_dir = StarTools.get_data_dir("astrbot_plugin_realistic_persona") / "thoughts"
@@ -158,6 +160,11 @@ class Main(Star):
                 self.thought_engine,
                 self.experience_bank
             )
+            
+            # 初始化人格演化系统
+            evolution_dir = StarTools.get_data_dir("astrbot_plugin_realistic_persona") / "personality_evolution"
+            self.personality_evolution = PersonalityEvolutionManager(evolution_dir)
+            logger.info("人格演化系统已初始化")
         
         # 注册事件处理器
         self._register_event_handlers()
@@ -537,11 +544,15 @@ class Main(Star):
             try:
                 user_message = event.message_obj.message_str
                 session_id = event.get_session_id()
-                
+                        
                 # 记录用户交互到经历银行
-                # 注：此时还没有AI回复，会在之后的訪问中更新
+                # 注：此时还没有AI回复，会在之后的访问中更新
                 self._record_interaction_async(session_id, user_message)
-                
+                        
+                # 人格演化：每日例行检查
+                if self.personality_evolution:
+                    self.personality_evolution.daily_routine()
+                        
             except Exception as e:
                 logger.error(f"记录用户交互失败: {e}")
         
@@ -1335,6 +1346,37 @@ class Main(Star):
             status = "暂无情绪数据"
         
         yield event.plain_result(status)
+    
+    @filter.command("personality_status")
+    async def check_personality_status(self, event: AstrMessageEvent):
+        """查看人格演化状态"""
+        if not self.enable_async_thinking or not self.personality_evolution:
+            yield event.plain_result("人格演化系统未启用")
+            return
+        
+        try:
+            summary = self.personality_evolution.get_personality_summary()
+            
+            status = f"""🌱 人格演化状态
+
+💬 表达能力：
+- 词汇水平: {summary['expression_levels']['vocabulary']}/10
+- 幽默成熟度: {summary['expression_levels']['humor']}/10
+- 句式复杂度: {summary['expression_levels']['complexity']}/10
+
+🔄 当前阶段: {summary['current_phase']}
+({'\u7a33\u5b9a\u671f' if summary['current_phase'] == 'stable' else '\u53d8\u5316\u671f'})
+
+❤️ 核心习惯：
+{chr(10).join('- ' + h for h in summary['core_habits'][:3])}
+
+🌟 临时习惯：
+{chr(10).join('- ' + h for h in summary['temporary_habits'])}
+            """
+            
+            yield event.plain_result(status)
+        except Exception as e:
+            yield event.plain_result(f"获取人格状态失败: {str(e)}")
     
     # ========== QQ空间相关命令（仅在启用时可用）==========
     
