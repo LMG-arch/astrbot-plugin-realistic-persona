@@ -1260,10 +1260,15 @@ class Main(Star):
             size(string): 图片尺寸，默认为1080x1920。可选项：1920x1024（横屏）、1024x1024（方形）等
         '''
         
+        logger.info(f"[绘图工具] 被调用 - prompt: {prompt[:50]}..., size: {size}")
+        logger.info(f"[绘图工具] 配置状态 - llm_tool_enabled: {self.llm_tool_enabled}, api_key存在: {bool(self.api_key)}")
+        
         if not self.llm_tool_enabled:
+            logger.warning("[绘图工具] 被禁用，无法生成图片")
             return "绘图工具已被禁用"
         
         if not self.api_key:
+            logger.warning("[绘图工具] API密钥未配置，无法生成图片")
             return "API密钥未配置，无法生成图片"
         
         try:
@@ -1276,23 +1281,34 @@ class Main(Star):
                 emotion = emotion_analysis["emotion"]
                 logger.debug(f"检测到情绪: {emotion.value}, 生成图片: {prompt}")
             
+            logger.info(f"[绘图工具] 开始请求图片生成...")
             # 发送图片生成请求
             image_url = await self._request_image(prompt, size)
+            logger.info(f"[绘图工具] 图片生成成功: {image_url}")
             
             # 构造并发送图片消息给用户（只发送图片，不加任何文字）
             chain: List[BaseMessageComponent] = [
                 Image.fromURL(image_url)
             ]
             
+            logger.info(f"[绘图工具] 发送图片给用户...")
             # 发送消息给用户（在后台发送，不返回给LLM）
             await event.send(event.chain_result(chain))
+            logger.info(f"[绘图工具] 图片已发送")
             
-            # 返回一个简洁的结果给LLM，告诉它图片已发送
-            # 让LLM根据图片内容和上下文自然地继续对话
-            return f"图片已生成并发送给用户，内容为：{prompt}。请根据图片内容自然地继续对话。"
+            # 返回给 LLM 的指示：让它生成自然的文字回复
+            # 根据用户偏好：多模态响应必须附带文字说明
+            return (
+                f"图片已发送给用户。\n"
+                f"图片内容：{prompt}\n\n"
+                f"请不要重复描述图片内容，而是根据当前场景和情境，"
+                f"用第一人称自然地表达你此刻的感受、心情或想法。\n"
+                f'例如：“发你了，江边风景真的很好，风也舒服。”'
+            )
         
         except Exception as e:
             error_msg = f"生成图片时遇到问题: {str(e)}"
+            logger.error(f"[绘图工具] 失败: {error_msg}")
             # 发送错误信息给用户
             await event.send(event.plain_result(error_msg))
             return f"图片生成失败：{str(e)}"
@@ -1357,6 +1373,9 @@ class Main(Star):
         try:
             summary = self.personality_evolution.get_personality_summary()
             
+            # 将阶段名称移出 f-string 表达式
+            phase_name = '稳定期' if summary['current_phase'] == 'stable' else '变化期'
+            
             status = f"""🌱 人格演化状态
 
 💬 表达能力：
@@ -1365,7 +1384,7 @@ class Main(Star):
 - 句式复杂度: {summary['expression_levels']['complexity']}/10
 
 🔄 当前阶段: {summary['current_phase']}
-({'\u7a33\u5b9a\u671f' if summary['current_phase'] == 'stable' else '\u53d8\u5316\u671f'})
+({phase_name})
 
 ❤️ 核心习惯：
 {chr(10).join('- ' + h for h in summary['core_habits'][:3])}
