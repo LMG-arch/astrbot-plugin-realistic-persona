@@ -543,15 +543,26 @@ class Main(Star):
                 pass
         
         # 生活模拟：根据日程、天气、新闻等构造额外系统提示
+        # 但要确保不干扰正常对话，只在需要时添加背景信息
         if self.enable_life_simulation:
             try:
-                life_info = await self._build_life_prompt_fragment(event, analysis)
-                if life_info:
-                    if hasattr(request, "system_prompt"):
-                        if request.system_prompt:
-                            request.system_prompt += "\n" + life_info
-                        else:
-                            request.system_prompt = life_info
+                # 获取用户消息，判断是否需要生活背景
+                user_message = event.message_obj.message_str if hasattr(event, 'message_obj') else ""
+                
+                # 如果是简单问题（如“你是谁”、“你好”等），不添加生活上下文
+                simple_greetings = ["你是谁", "你好", "hi", "hello", "在吗", "在不在", "是你吗"]
+                is_simple_question = any(greeting in user_message.lower() for greeting in simple_greetings)
+                
+                if not is_simple_question and len(user_message) > 5:
+                    life_info = await self._build_life_context_info(event, analysis)
+                    if life_info:
+                        # 作为辅助信息添加，不是主要上下文
+                        life_context = f"\n\n[背景信息 - 仅供参考，不影响主要回答]\n{life_info}"
+                        if hasattr(request, "system_prompt"):
+                            if request.system_prompt:
+                                request.system_prompt += life_context
+                            else:
+                                request.system_prompt = life_context
             except Exception as e:
                 logger.error(f"生活模拟上下文构建失败: {e}")
                 # 即使生活模拟失败，也要确保不影响LLM请求
@@ -577,6 +588,35 @@ class Main(Star):
         # 确保函数返回None
         return None
     
+    # ========== 经历累积辅助方法 ==========
+    
+    async def _build_life_context_info(self, event: AstrMessageEvent, analysis: Optional[Dict]) -> str:
+        """构建生活上下文信息（日程、天气、新闻等）"""
+        try:
+            now = datetime.now()
+            context_parts = []
+            
+            # 获取日程
+            schedule = await self._maybe_generate_schedule(now)
+            if schedule:
+                context_parts.append(f"今日安排：{schedule[:200]}...")  # 限制长度
+            
+            # 获取天气
+            weather = await self._get_weather_desc()
+            if weather:
+                context_parts.append(f"天气情况：{weather}")
+            
+            # 获取新闻（仅在早上）
+            if now.hour >= self.news_hour and now.hour < self.news_hour + 3:
+                news = await self._maybe_fetch_news(now)
+                if news:
+                    context_parts.append(f"今日新闻：{news[:150]}...")  # 限制长度
+            
+            return "\n".join(context_parts) if context_parts else ""
+        except Exception as e:
+            logger.error(f"构建生活上下文失败: {e}")
+            return ""
+        
     # ========== 经历累积辅助方法 ==========
         
     def _record_interaction_async(self, session_id: str, user_message: str) -> None:
