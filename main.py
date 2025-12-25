@@ -314,20 +314,22 @@ class Main(Star):
         insomnia_prob = self.config.get("insomnia_probability", 0)
         logger.info(f"[QQ空间] 配置: enable_qzone={enable_qzone}, publish_times_per_day={publish_times}, insomnia_probability={insomnia_prob}")
                 
-        # 加载自动发说说模块
+        # 创建PostOperator（手动命令和自动发布都需要）
+        logger.info("[QQ空间] 创建PostOperator...")
+        # 注意：db 参数为 None 是临时解决方案，实际运行时不会使用数据库功能
+        self.operator = PostOperator(  # type: ignore[arg-type,call-arg]
+            self.context, self.config, self.qzone, None, self.llm, self.style  # type: ignore[arg-type]
+        )
+        logger.info("[QQ空间] PostOperator创建完成")
+        
+        # 加载自动发说说模块（仅在启用时）
         if self.config.get("enable_qzone") and (self.config.get("publish_times_per_day", 0) > 0 or self.config.get("insomnia_probability", 0) > 0):
-            logger.info("[QQ空间] 创建PostOperator和AutoPublish...")
-            # 注意：这里只需要简化的发布功能，不需要完整的PostOperator
+            logger.info("[QQ空间] 创建AutoPublish...")
             from .core.scheduler import AutoPublish
-            # 创建简化的operator用于自动发布
-            # 注意：db 参数为 None 是临时解决方案，实际运行时不会使用数据库功能
-            self.operator = PostOperator(  # type: ignore[arg-type,call-arg]
-                self.context, self.config, self.qzone, None, self.llm, self.style  # type: ignore[arg-type]
-            )
             self.auto_publish = AutoPublish(self.context, self.config, self.operator)  # type: ignore[arg-type]
-            logger.info("[QQ空间] PostOperator和AutoPublish创建完成")
+            logger.info("[QQ空间] AutoPublish创建完成")
         else:
-            logger.info("[QQ空间] 未启用自动发说说（publish_times_per_day=0 且 insomnia_probability=0）")
+            logger.info("[QQ空间] 未启用自动发说说（enable_qzone=False 或 publish_times_per_day=0 且 insomnia_probability=0）")
         
         # 初始化个人资料管理器
         if self.config.get("enable_auto_profile_update", False):
