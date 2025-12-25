@@ -5,7 +5,7 @@
 """
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, Any
 from astrbot.api import logger
@@ -23,13 +23,15 @@ class LocalDataManager:
         self.schedule_file = self.data_dir / "schedule_data.json"
         # 新闻数据文件
         self.news_file = self.data_dir / "news_data.json"
+        # 绘画提示词历史文件
+        self.drawing_prompts_file = self.data_dir / "drawing_prompts.json"
         
         # 初始化数据文件
         self._init_data_files()
     
     def _init_data_files(self):
         """初始化数据文件"""
-        for file_path in [self.weather_file, self.schedule_file, self.news_file]:
+        for file_path in [self.weather_file, self.schedule_file, self.news_file, self.drawing_prompts_file]:
             if not file_path.exists():
                 file_path.write_text(json.dumps({}, ensure_ascii=False), encoding='utf-8')
     
@@ -117,12 +119,71 @@ class LocalDataManager:
         """保存JSON文件"""
         file_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
     
+    def save_drawing_prompt(self, prompt: str, enhanced_prompt: str):
+        """保存绘画提示词
+        
+        Args:
+            prompt: 原始提示词
+            enhanced_prompt: 增强后的提示词
+        """
+        try:
+            data = self._load_json_file(self.drawing_prompts_file)
+            
+            # 按日期组织
+            today = datetime.now().strftime("%Y-%m-%d")
+            if today not in data:
+                data[today] = []
+            
+            # 保存记录
+            record = {
+                "timestamp": datetime.now().isoformat(),
+                "original_prompt": prompt,
+                "enhanced_prompt": enhanced_prompt
+            }
+            data[today].append(record)
+            
+            # 限制每天最多保存50条
+            if len(data[today]) > 50:
+                data[today] = data[today][-50:]
+            
+            self._save_json_file(self.drawing_prompts_file, data)
+            logger.debug(f"[LOCAL DATA] 绘画提示词已保存到本地")
+        except Exception as e:
+            logger.error(f"[LOCAL DATA] 保存绘画提示词失败: {e}")
+    
+    def get_recent_drawing_prompts(self, days: int = 3, max_count: int = 10) -> list:
+        """获取最近的绘画提示词
+        
+        Args:
+            days: 查询最近几天的记录
+            max_count: 最多返回多少条
+        
+        Returns:
+            最近的绘画提示词列表
+        """
+        try:
+            data = self._load_json_file(self.drawing_prompts_file)
+            current_date = datetime.now()
+            
+            all_prompts = []
+            for i in range(days):
+                date_str = (current_date - timedelta(days=i)).strftime("%Y-%m-%d")
+                if date_str in data:
+                    all_prompts.extend(data[date_str])
+            
+            # 按时间倒序排列，取最新的
+            all_prompts.sort(key=lambda x: x["timestamp"], reverse=True)
+            return all_prompts[:max_count]
+        except Exception as e:
+            logger.error(f"[LOCAL DATA] 获取绘画提示词历史失败: {e}")
+            return []
+    
     def clear_expired_data(self, days_to_keep: int = 7):
         """清理过期数据"""
         try:
             current_time = datetime.now()
             
-            for file_path in [self.weather_file, self.schedule_file, self.news_file]:
+            for file_path in [self.weather_file, self.schedule_file, self.news_file, self.drawing_prompts_file]:
                 data = self._load_json_file(file_path)
                 dates_to_remove = []
                 

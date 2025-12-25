@@ -91,11 +91,15 @@ class AutoRandomCronTask:
 
 
 # ============================
-# 自动评论
+# 自动评论（已废弃，保留以供参考）
 # ============================
 
 
 class AutoComment(AutoRandomCronTask):
+    """
+    自动评论功能（已废弃）
+    此功能已集成到 AutoPublish 中
+    """
     def __init__(
         self,
         context: Context,
@@ -103,7 +107,9 @@ class AutoComment(AutoRandomCronTask):
         operator: PostOperator,
     ):
         self.operator = operator
-        super().__init__(context, config["comment_cron"], "AutoComment")
+        # comment_cron 配置已废弃，使用默认值
+        cron_expr = config.get("comment_cron", "0 */6 * * *")  # 默认每6小时
+        super().__init__(context, cron_expr, "AutoComment")
 
     async def do_task(self):
         await self.operator.read_feed(get_recent=True)

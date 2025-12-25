@@ -35,6 +35,36 @@ class PostOperator:
         # 获取唯一管理员
         self.admin_ids: list[str] = context.get_config().get("admins_id", [])
         self.admin_id = next(aid for aid in self.admin_ids if aid.isdigit())
+        
+        # 人设配置（优先使用插件配置）
+        self.persona_profile = config.get("persona_profile", "")
+    
+    async def _get_persona_profile(self) -> str:
+        """
+        获取人设配置，优先使用插件配置，其次使用系统人设
+        
+        Returns:
+            人设描述文本
+        """
+        # 1. 优先使用插件自己的人设配置
+        if self.persona_profile and self.persona_profile.strip():
+            logger.debug("[PostOperator] 使用插件配置的人设")
+            return self.persona_profile.strip()
+        
+        # 2. 回退到系统人设
+        try:
+            persona_mgr = self.context.persona_manager
+            default_persona = await persona_mgr.get_default_persona_v3()
+            system_profile = default_persona.get("prompt", "")
+            if system_profile:
+                logger.debug("[PostOperator] 使用系统配置的人设")
+                return system_profile
+        except Exception as e:
+            logger.debug(f"[PostOperator] 获取系统人设失败: {e}")
+        
+        # 3. 都没有则返回空
+        logger.debug("[PostOperator] 未配置人设，使用空字符串")
+        return ""
 
     # ------------------------ 公共 pipeline ------------------------ #
     async def _pipeline(
@@ -264,17 +294,38 @@ class PostOperator:
         """
         # llm配文
         if llm_text and not text:
-            text = await self.llm.generate_diary()
+            persona_profile = await self._get_persona_profile()
+            # 获取配置的用户ID
+            user_id = self.config.get("diary_user_id", "")
+            text = await self.llm.generate_diary(persona_profile=persona_profile, user_id=user_id)
 
         # llm配图：根据日记 + 生活信息构造提示词，用 ModelScope 生成图片
         if llm_images and not images:
             diary_for_image = text
             if not diary_for_image:
-                diary_for_image = await self.llm.generate_diary()
+                persona_profile = await self._get_persona_profile()
+                # 获取配置的用户ID
+                user_id = self.config.get("diary_user_id", "")
+                diary_for_image = await self.llm.generate_diary(persona_profile=persona_profile, user_id=user_id)
             if diary_for_image:
                 try:
+                    # 获取配置的用户ID
+                    user_id = self.config.get("diary_user_id", "")
+                    logger.info(f"[配图] 配置的diary_user_id: {user_id}")
+                    
+                    # 获取群ID（如果event不为None）
+                    group_id = ""
+                    if event and hasattr(event, 'message_obj') and hasattr(event.message_obj, 'group_id'):
+                        group_id = str(event.message_obj.group_id or "")
+                        logger.info(f"[配图] 从 event 获取的group_id: {group_id}")
+                    else:
+                        logger.info(f"[配图] event为None或无group_id，使用user_id: {user_id}")
+                    
+                    # 传入group_id和user_id让大模型获取对话历史
                     img_prompt = await self.llm.generate_image_prompt_from_diary(
-                        diary_for_image
+                        diary_for_image,
+                        group_id=group_id,
+                        user_id=user_id
                     )
                     if img_prompt:
                         img_url = await self.llm._request_modelscope(img_prompt)
@@ -284,7 +335,7 @@ class PostOperator:
                         if not text and diary_for_image:
                             text = diary_for_image
                 except Exception as e:
-                    logger.error(f"LLM/ModelScope 生成配图失败：{e}")
+                    logger.error(f"LLM/ModelScope 生成配图失败：{e}", exc_info=True)
 
         if not post:
             uin = event.get_self_id() if event else self.uin
@@ -305,7 +356,7 @@ class PostOperator:
                 if event:
                     await event.send(event.plain_result(str(data)))
                     event.stop_event()
-                raise StopIteration
+                return  # 使用 return 而不是 raise StopIteration
             post.tid = data.get("tid", "")
             post.status = "approved"
             if now := data.get("now", ""):
@@ -362,36 +413,78 @@ class PostOperator:
     
     
     async def auto_reply_to_comments(self):
-        """自动回复评论的功能"""
+        """自动回复自己说说下的评论"""
         try:
-            # 获取最近的说说
-            succ, data = await self.qzone.get_recent_feeds()
-            if not succ:
-                logger.error("获取最近说说失败")
+            # 检查 Qzone 连接是否正常
+            if not self.qzone or not self.qzone.ctx:
+                logger.warning("[自动回复] Qzone 未连接或 ctx 为 None，跳过自动回复")
                 return
+            
+            # 获取bot自己的说说列表
+            succ, data = await self.qzone.get_feeds(
+                target_id=str(self.qzone.ctx.uin),  # 获取自己的说说
+                pos=1,
+                num=10  # 检查最近10条说说
+            )
+            if not succ:
+                logger.error("获取自己的说说列表失败")
+                return
+            
+            bot_uin = str(self.qzone.ctx.uin)
             
             for post in data:
                 if not post.tid:  # 确保说说ID存在
                     continue
-                # 获取说说的评论
+                
+                # 确认是bot自己的说说
+                if str(post.uin) != bot_uin:
+                    logger.debug(f"[自动回复] 跳过别人的说说: {post.tid}, 作者uin={post.uin}")
+                    continue
+                
+                # 获取说说的详细信息(包含完整评论)
                 detail = await self.qzone.get_detail(post)
                 
                 # 检查是否有新评论（未回复的）
                 for comment in detail.comments:
-                    # 如果是别人对bot说说的评论，生成回复
-                    if str(comment.uin) != str(self.qzone.ctx.uin):  # 不是自己
+                    # 1. 如果是别人对bot说说的评论
+                    if str(comment.uin) == bot_uin:
+                        logger.debug(f"[自动回复] 跳过自己的评论: {comment.content[:20]}...")
+                        continue  # 不回复自己
+                    
+                    # 2. 如果是主评论(不是楼中楼)
+                    if comment.parent_tid is None:
+                        # 检查是否已经回复过（查看楼中楼是否有bot的回复）
+                        has_replied = False
+                        for sub_comment in detail.comments:
+                            # 如果这个楼中楼是bot发的且父评论是当前评论
+                            if (
+                                sub_comment.parent_tid == comment.tid
+                                and str(sub_comment.uin) == bot_uin
+                            ):
+                                has_replied = True
+                                break
+                        
+                        if has_replied:
+                            logger.debug(f"[自动回复] 已回复过评论 from {comment.nickname}: {comment.content[:20]}...")
+                            continue
+                        
                         # 生成回复内容
                         reply_text = await self.llm.generate_comment(post)
-                        if reply_text:
-                            # 回复评论
-                            reply_ok, result = await self.qzone.comment(
-                                fid=str(post.tid),
-                                target_id=str(post.uin),
-                                content=f"回复 {comment.nickname}: {reply_text}"
-                            )
-                            if reply_ok:
-                                logger.info(f"成功回复评论 from {comment.nickname}: {reply_text}")
-                            else:
-                                logger.error(f"回复评论失败: {result}")
+                        if not reply_text:
+                            logger.warning(f"[自动回复] 生成回复内容失败")
+                            continue
+                        
+                        # 使用reply API回复评论
+                        reply_ok, result = await self.qzone.reply(
+                            fid=str(post.tid),
+                            target_name=comment.nickname,
+                            content=reply_text
+                        )
+                        
+                        if reply_ok:
+                            logger.info(f"[自动回复] 成功回复评论 from {comment.nickname}: {reply_text[:50]}...")
+                        else:
+                            logger.error(f"[自动回复] 回复评论失败: {result}")
+                    
         except Exception as e:
-            logger.error(f"自动回复评论时发生错误: {e}")
+            logger.error(f"[自动回复] 发生错误: {e}", exc_info=True)

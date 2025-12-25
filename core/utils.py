@@ -40,7 +40,18 @@ async def get_nickname(event: AiocqhttpMessageEvent, user_id) -> str:
         return stranger_info.get("nickname")
 
 async def download_file(url: str) -> bytes | None:
-    """下载图片"""
+    """下载图片或读取本地文件"""
+    # 如果是本地路径，直接读取
+    import os
+    if os.path.exists(url):
+        try:
+            with open(url, 'rb') as f:
+                return f.read()
+        except Exception as e:
+            logger.error(f"本地文件读取失败: {url}, 错误: {e}")
+            return None
+    
+    # 否则从 URL 下载
     url = url.replace("https://", "http://")
     try:
         async with aiohttp.ClientSession() as client:
@@ -48,7 +59,8 @@ async def download_file(url: str) -> bytes | None:
             img_bytes = await response.read()
             return img_bytes
     except Exception as e:
-        logger.error(f"图片下载失败: {e}")
+        logger.error(f"图片下载失败: {url}, 错误: {e}")
+        return None
 
 async def get_image_urls(event: AstrMessageEvent, reply: bool = True) -> list[str]:
     """获取图片url列表"""

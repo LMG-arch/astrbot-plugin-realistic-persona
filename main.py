@@ -2,6 +2,11 @@
 """
 拟人化角色行为系统插件 (Realistic Persona Plugin)
 整合了情绪感知、生活模拟、QQ空间日记、AI配图等功能
+
+版本: v1.8.0
+作者: custom
+最后更新: 2025-01-01
+符合AstrBot插件开发完全指南规范
 """
 
 import asyncio
@@ -10,6 +15,8 @@ import time
 from pathlib import Path
 from typing import Optional, Dict, List, cast
 from datetime import datetime
+import functools
+import traceback
 
 import aiohttp
 import json
@@ -25,6 +32,20 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import Aioc
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_platform_adapter import AiocqhttpAdapter
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 from astrbot.core.utils.version_comparator import VersionComparator
+
+# 错误处理装饰器
+def error_handler(func):
+    """统一错误处理装饰器，用于捕获并记录异常"""
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        try:
+            return await func(*args, **kwargs)
+        except Exception as e:
+            func_name = func.__name__
+            logger.error(f"[错误处理] {func_name} 执行失败: {str(e)}", exc_info=True)
+            # 不重新抛出异常，保证系统稳定性
+            return None
+    return wrapper
 
 # 导入子模块
 try:
@@ -51,6 +72,9 @@ from .core.memory_manager import MemoryManager
 from .core.timeline_verifier import TimelineVerifier
 from .core.profile_manager import ProfileManager
 from .core.personality_evolution import PersonalityEvolutionManager
+from .core.auto_profile_updater import AutoProfileUpdater
+from .core.life_story_engine import LifeStoryEngine
+from .core.news_getter import NewsGetter
 
 # 导入QQ空间核心模块（如果可用）
 try:
@@ -66,16 +90,44 @@ except ImportError as e:
 
 
 class Main(Star):
-    """拟人化角色行为系统主类"""
+    """拟人化角色行为系统主类
+    
+    整合了多个模块以实现真实可信的AI角色体验：
+    - 情绪感知系统：自动检测用户情绪并调整回复
+    - 生活模拟系统：生成日程、获取天气和新闻
+    - AI绘图功能：集成ModelScope文生图API
+    - QQ空间日记：自动生成并发布说说
+    - 异步思考系统：后台持续思考和经历累积
+    - 人格演化系统：表达风格和习惯的渐进式演化
+    
+    属性:
+        context (Context): 插件上下文
+        config (dict): 插件配置
+        enable_emotion_detection (bool): 是否启用情绪检测
+        enable_life_simulation (bool): 是否启用生活模拟
+        enable_qzone (bool): 是否启用QQ空间功能
+        enable_async_thinking (bool): 是否启用异步思考
+    """
     
     # 数据库版本
     DB_VERSION = 4
 
     def __init__(self, context: Context, config: Optional[dict] = None):
+        """初始化插件
+        
+        Args:
+            context: 插件上下文，提供对AstrBot核心服务的访问
+            config: 插件配置字典
+        """
         super().__init__(context)
         self.context = context
-        config = config or {}
-        self.config = cast(dict, config)  # 类型注释：确保 config 是 dict 类型
+        # 获取配置，优先使用传入的config，否则从context获取
+        if config is None:
+            config = {}
+        self.config = cast(dict, config)
+        
+        # 存储当前请求的event（用于工具调用解析）
+        self._current_event = None
         
         # 检查版本
         if not VersionComparator.compare_version(VERSION, "4.1.0") >= 0:
@@ -99,13 +151,15 @@ class Main(Star):
         
         # ========== 生活模拟与人设配置 ==========
         self.enable_life_simulation = config.get("enable_life_simulation", True)
-        # 从系统获取人设，而不是使用插件配置的人设
-        self.persona_name = config.get("persona_name", "她")  # 保留配置选项，但优先使用系统人设
-        self.persona_profile = ""  # 将在运行时从系统获取
+        # 插件独立人设，优先级高于系统人设
+        self.persona_name = config.get("persona_name", "她")
+        self.persona_profile = config.get("persona_profile", "")  # 插件独立人设，留空则使用系统人设
         self.schedule_hour = config.get("schedule_hour", 7)
         self.news_hour = config.get("news_hour", 7)  # 默认早上7点获取新闻
         self.weather_location = config.get("weather_location", "")
         self.news_topics = config.get("news_topics", ["科技", "生活方式", "兴趣相关话题"])
+        self.schedule_prompt = config.get("schedule_prompt", "")  # 日程生成提示词
+        self.news_prompt = config.get("news_prompt", "")  # 新闻获取提示词
         
         # ========== QQ空间配置 ==========
         self.enable_qzone = config.get("enable_qzone", False)
@@ -114,8 +168,28 @@ class Main(Star):
         self.publish_time_ranges = config.get("publish_time_ranges", ["9-12", "14-18", "19-22"])  # 发说说时间段
         self.insomnia_probability = config.get("insomnia_probability", 0.2)  # 失眠发说说概率
         self.diary_max_msg = config.get("diary_max_msg", 200)
+        self.diary_user_id = config.get("diary_user_id", "")  # 优先使用的对话用户ID
         self.diary_prompt = config.get("diary_prompt", "")
         self.comment_prompt = config.get("comment_prompt", "")
+        
+        # ========== 个人资料自动更新配置 ==========
+        self.enable_auto_profile_update = config.get("enable_auto_profile_update", False)
+        self.enable_auto_nickname = config.get("enable_auto_nickname", False)
+        self.enable_auto_signature = config.get("enable_auto_signature", True)
+        self.enable_auto_avatar = config.get("enable_auto_avatar", False)
+        self.profile_update_cooldown = config.get("profile_update_cooldown", 1800)
+        self.emotion_change_threshold = config.get("emotion_change_threshold", 0.6)
+        
+        # ========== 人生故事引擎配置 ==========
+        self.enable_life_story = config.get("enable_life_story", True)  # 是否启用人生故事引擎
+        self.life_story_update_interval = config.get("life_story_update_interval", 3)  # 更新间隔（天）
+        self.life_story_collect_days = config.get("life_story_collect_days", 7)  # 收集最近N天的经历
+        self.life_story_context_max_length = config.get("life_story_context_max_length", 200)  # 精简上下文最大长度
+        self.life_story_cache_days = config.get("life_story_cache_days", 7)  # 缓存有效期（天）
+        
+        # ========== 新闻获取配置 ==========
+        self.enable_news_getter = config.get("enable_news_getter", True)  # 是否启用新闻获取模块
+        self.news_online_fetch = config.get("news_online_fetch", True)  # 是否启用联网获取新闻
         
         # ========== 初始化状态管理 ==========
         self.emotion_contexts: Dict[str, EmotionContext] = {}
@@ -144,6 +218,23 @@ class Main(Star):
         self.timeline_verifier = None
         self.profile_manager = None  # 个人资料管理器
         self.personality_evolution = None  # 人格演化管理器
+        self.auto_profile_updater = None  # 自动Profile更新器
+        self.life_story_engine = None  # 人生故事引擎
+        self.news_getter = None  # 新闻获取器
+        
+        # 初始化自动Profile更新器
+        if self.enable_auto_profile_update:
+            profile_dir = StarTools.get_data_dir("astrbot_plugin_realistic_persona") / "auto_profile"
+            self.auto_profile_updater = AutoProfileUpdater(
+                data_dir=profile_dir,
+                enable_nickname=self.enable_auto_nickname,
+                enable_signature=self.enable_auto_signature,
+                enable_avatar=self.enable_auto_avatar,
+                cooldown=self.profile_update_cooldown,
+                threshold=self.emotion_change_threshold,
+                persona_name=self.persona_name
+            )
+            logger.info("自动Profile更新器已初始化")
         
         if self.enable_async_thinking:
             thought_dir = StarTools.get_data_dir("astrbot_plugin_realistic_persona") / "thoughts"
@@ -165,6 +256,35 @@ class Main(Star):
             evolution_dir = StarTools.get_data_dir("astrbot_plugin_realistic_persona") / "personality_evolution"
             self.personality_evolution = PersonalityEvolutionManager(evolution_dir)
             logger.info("人格演化系统已初始化")
+            
+            # 初始化人生故事引擎
+            if self.enable_life_story:
+                story_dir = StarTools.get_data_dir("astrbot_plugin_realistic_persona") / "life_story"
+                self.life_story_engine = LifeStoryEngine(
+                    data_dir=story_dir,
+                    experience_bank=self.experience_bank,
+                    personality_evolution=self.personality_evolution,
+                    thought_engine=self.thought_engine,
+                    update_interval=86400 * self.life_story_update_interval,  # 使用配置的间隔
+                    collect_days=self.life_story_collect_days,  # 使用配置的收集天数
+                    context_max_length=self.life_story_context_max_length,  # 使用配置的最大长度
+                    cache_days=self.life_story_cache_days  # 使用配置的缓存天数
+                )
+                logger.info(f"人生故事引擎已初始化（更新间隔: {self.life_story_update_interval}天, 收集范围: {self.life_story_collect_days}天）")
+            else:
+                logger.info("人生故事引擎未启用")
+            
+            # 初始化新闻获取模块
+            if self.enable_news_getter and self.enable_life_simulation:
+                news_dir = StarTools.get_data_dir("astrbot_plugin_realistic_persona") / "news_data"
+                self.news_getter = NewsGetter(
+                    data_dir=news_dir,
+                    enable_online_fetch=self.news_online_fetch,
+                    topics=self.news_topics
+                )
+                logger.info(f"新闻获取模块已初始化（联网获取: {self.news_online_fetch}, 主题: {self.news_topics}）")
+            else:
+                logger.info("新闻获取模块未启用")
         
         # 注册事件处理器
         self._register_event_handlers()
@@ -189,76 +309,142 @@ class Main(Star):
         self.cache.mkdir(parents=True, exist_ok=True)
 
     async def initialize(self):
-        """插件激活时调用"""
-        logger.info("拟人化角色行为系统插件正在加载...")
-        
-        # 启动异步思考循环
-        if self.enable_async_thinking and self.async_thinking_scheduler:
-            try:
-                self.async_thinking_scheduler.start()
-                logger.info("异步思考循环已启动")
-            except Exception as e:
-                logger.error(f"启动异步思考循环失败: {e}")
-        
-        # 初始化QQ空间相关设置
-        if self.enable_qzone and QZONE_AVAILABLE:
-            # 实例化pillowmd样式
-            if PILLOWMD_AVAILABLE:
-                try:
-                    self.style = pillowmd.LoadMarkdownStyles(self.pillowmd_style_dir)
-                except Exception as e:
-                    logger.error(f"无法加载pillowmd样式：{e}")
+        """插件激活时调用，用于初始化资源和启动服务"""
+        try:
+            logger.info("拟人化角色行为系统插件正在加载...")
             
-            asyncio.create_task(self.initialize_qzone(wait_ws_connected=False))
-        
-        # 打印状态
+            # 加载当天日程到配置显示
+            try:
+                now = datetime.now()
+                today_str = now.strftime("%Y-%m-%d")
+                cached_schedule = self.local_data_manager.get_schedule_data(today_str)
+                if cached_schedule:
+                    self.config["today_schedule_display"] = f"[当前日程 - {today_str}]\n\n{cached_schedule}"
+                    logger.info(f"已加载当天日程到配置显示")
+            except Exception as e:
+                logger.debug(f"加载日程显示失败: {e}")
+            
+            # 启动异步思考循环
+            if self.enable_async_thinking and self.async_thinking_scheduler:
+                try:
+                    self.async_thinking_scheduler.start()
+                    logger.info("异步思考循环已启动")
+                except Exception as e:
+                    logger.error(f"启动异步思考循环失败: {e}")
+            
+            # 启动主动消息调度器
+            if self.enable_proactive_messages:
+                try:
+                    asyncio.create_task(self.proactive_manager.start_scheduler(self._send_proactive_message))
+                    logger.info(f"主动消息功能已启动，空闲延迟: {self.idle_greeting_delay}秒")
+                except Exception as e:
+                    logger.error(f"启动主动消息调度器失败: {e}")
+            
+            # 初始化QQ空间相关设置
+            if self.enable_qzone and QZONE_AVAILABLE:
+                # 实例化pillowmd样式
+                if PILLOWMD_AVAILABLE:
+                    try:
+                        self.style = pillowmd.LoadMarkdownStyles(self.pillowmd_style_dir)
+                    except Exception as e:
+                        logger.error(f"无法加载pillowmd样式：{e}")
+                
+                asyncio.create_task(self.initialize_qzone(wait_ws_connected=False))
+            
+            # 打印状态和使用说明
+            self._print_plugin_status()
+            
+            logger.info("拟人化角色行为系统插件加载完毕！")
+        except Exception as e:
+            logger.error(f"插件初始化失败: {e}", exc_info=True)
+            raise
+    
+    def _print_plugin_status(self):
+        """打印插件状态信息"""
         emotion_status = "开启" if self.enable_emotion_detection else "关闭"
         selfie_status = "开启" if self.enable_auto_selfie else "关闭"
         context_status = "开启" if self.enable_context_events else "关闭"
         life_sim_status = "开启" if self.enable_life_simulation else "关闭"
         qzone_status = "开启" if self.enable_qzone else "关闭"
         
+        logger.info("="*50)
+        logger.info("功能状态与使用场景：")
         logger.info(f"情绪检测: {emotion_status}")
+        if self.enable_emotion_detection:
+            logger.info("  • 在每次对话中分析用户情绪，并注入到LLM系统提示中")
+        
         logger.info(f"自动自拍: {selfie_status}")
+        if self.enable_auto_selfie:
+            logger.info(f"  • 检测到特定情绪时，以{self.selfie_trigger_chance*100}%概率触发自拍生成")
+        
         logger.info(f"上下文事件: {context_status}")
+        if self.enable_context_events:
+            logger.info("  • 检测对话中的问候、话题切换等事件")
+        
         logger.info(f"生活模拟: {life_sim_status}")
+        if self.enable_life_simulation:
+            logger.info("  • 在对话中注入日程、天气、新闻等背景信息")
+            logger.info(f"  • 日程生成时间：每天{self.schedule_hour}点")
+            logger.info(f"  • 新闻学习时间：每天{self.news_hour}点")
+        
         logger.info(f"QQ空间功能: {qzone_status}")
-        logger.info("拟人化角色行为系统插件加载完毕！")
+        logger.info("="*50)
 
     async def terminate(self):
-        """插件停用时调用"""
-        logger.info("拟人化角色行为系统插件正在卸载...")
+        """插件停用时调用，用于清理资源和停止服务"""
+        try:
+            logger.info("拟人化角色行为系统插件正在卸载...")
             
-        # 停止异步思考循环
-        if self.enable_async_thinking and self.async_thinking_scheduler:
-            try:
-                self.async_thinking_scheduler.stop()
-                logger.info("异步思考循环已停止")
-            except Exception as e:
-                logger.error(f"停止异步思考循环失败: {e}")
+            # 停止异步思考循环
+            if self.enable_async_thinking and self.async_thinking_scheduler:
+                try:
+                    self.async_thinking_scheduler.stop()
+                    logger.info("异步思考循环已停止")
+                except Exception as e:
+                    logger.error(f"停止异步思考循环失败: {e}")
             
-        # 停止主动消息调度器
-        if self.proactive_manager:
-            self.proactive_manager.stop_scheduler()
-        
-        # 清空情绪上下文
-        self.emotion_contexts.clear()
-        
-        # 清理缓存
-        self._weather_cache.clear()
-        self._news_cache.clear()
-        self._schedule_cache.clear()
-        self.favorability.clear()
-        self.life_state.clear()
-        
-        # 清理QQ空间相关资源
-        if self.enable_qzone and QZONE_AVAILABLE:
-            if hasattr(self, "qzone"):
-                await self.qzone.terminate()
-            if hasattr(self, "auto_publish"):
-                await self.auto_publish.terminate()
-        
-        logger.info("拟人化角色行为系统插件已卸载")
+            # 停止主动消息调度器
+            if self.proactive_manager:
+                try:
+                    self.proactive_manager.stop_scheduler()
+                    logger.debug("主动消息调度器已停止")
+                except Exception as e:
+                    logger.debug(f"停止主动消息调度器失败: {e}")
+            
+            # 清空情绪上下文
+            if hasattr(self, 'emotion_contexts'):
+                self.emotion_contexts.clear()
+            
+            # 清理缓存
+            if hasattr(self, '_weather_cache'):
+                self._weather_cache.clear()
+            if hasattr(self, '_news_cache'):
+                self._news_cache.clear()
+            if hasattr(self, '_schedule_cache'):
+                self._schedule_cache.clear()
+            if hasattr(self, 'favorability'):
+                self.favorability.clear()
+            if hasattr(self, 'life_state'):
+                self.life_state.clear()
+            
+            # 清理QQ空间相关资源
+            if self.enable_qzone and QZONE_AVAILABLE:
+                if hasattr(self, "qzone"):
+                    try:
+                        await self.qzone.terminate()
+                        logger.debug("QQ空间模块已清理")
+                    except Exception as e:
+                        logger.debug(f"清理QQ空间模块失败: {e}")
+                if hasattr(self, "auto_publish"):
+                    try:
+                        await self.auto_publish.terminate()
+                        logger.debug("自动发布模块已清理")
+                    except Exception as e:
+                        logger.debug(f"清理自动发布模块失败: {e}")
+            
+            logger.info("拟人化角色行为系统插件已卸载")
+        except Exception as e:
+            logger.error(f"插件卸载时发生错误: {e}", exc_info=True)
     
     @filter.on_platform_loaded()
     async def on_platform_loaded(self):
@@ -316,9 +502,15 @@ class Main(Star):
                 
         # 创建PostOperator（手动命令和自动发布都需要）
         logger.info("[QQ空间] 创建PostOperator...")
-        # 注意：db 参数为 None 是临时解决方案，实际运行时不会使用数据库功能
+        # 初始化数据库
+        from .core.post import PostDB
+        db_path = StarTools.get_data_dir("astrbot_plugin_realistic_persona") / "posts.db"
+        self.post_db = PostDB(db_path)
+        await self.post_db.initialize()
+        logger.info(f"[QQ空间] 数据库已初始化: {db_path}")
+        
         self.operator = PostOperator(  # type: ignore[arg-type,call-arg]
-            self.context, self.config, self.qzone, None, self.llm, self.style  # type: ignore[arg-type]
+            self.context, self.config, self.qzone, self.post_db, self.llm, self.style  # type: ignore[arg-type]
         )
         logger.info("[QQ空间] PostOperator创建完成")
         
@@ -342,6 +534,49 @@ class Main(Star):
         logger.info(f"[QQ空间] 组件状态: qzone={'OK' if hasattr(self, 'qzone') else 'MISSING'}, llm={'OK' if hasattr(self, 'llm') else 'MISSING'}, operator={'OK' if hasattr(self, 'operator') else 'MISSING'}")
     
     # ========== 事件处理器注册 ==========
+    
+    async def _send_proactive_message(self, message: str, session_id: str, context_data: Dict):
+        """发送主动消息的回调函数
+        
+        Args:
+            message: 消息内容
+            session_id: 会话ID
+            context_data: 上下文数据
+        
+        注意：
+            由于AstrBot插件系统主要是被动响应模式，主动发送消息需要访问平台适配器的API。
+            当前实现仅记录日志，实际发送需要：
+            1. 获取平台适配器实例
+            2. 调用平台特定的消息发送API
+            3. 处理异步发送和错误
+        """
+        try:
+            # 从上下文数据中获取必要信息
+            user_id = context_data.get("user_id")
+            platform = context_data.get("platform")
+            
+            if not user_id:
+                logger.warning(f"[主动消息] 缺少user_id，无法发送")
+                return
+            
+            logger.info(f"[主动消息] 触发 - 会话: {session_id}, 用户: {user_id}, 平台: {platform}")
+            logger.info(f"[主动消息] 内容: {message}")
+            
+            # TODO: 实现实际的消息发送
+            # 示例代码（需要根据实际平台调整）：
+            # if platform == "aiocqhttp":
+            #     adapter = self.context.get_platform_adapter("aiocqhttp")
+            #     if adapter:
+            #         await adapter.send_message(user_id=user_id, message=message)
+            
+            logger.warning("[主动消息] 实际发送功能尚未实现，需要平台API支持")
+            logger.info("[主动消息] 建议：")
+            logger.info("  1. 如果使用QQ平台，可以通过OneBot API主动发送")
+            logger.info("  2. 需要在插件中保存平台适配器实例")
+            logger.info("  3. 或者使用AstrBot的全局消息总线")
+            
+        except Exception as e:
+            logger.error(f"[主动消息] 发送失败: {e}", exc_info=True)
     
     def _register_event_handlers(self):
         """注册事件处理器"""
@@ -415,10 +650,27 @@ class Main(Star):
                 
                 # 自动修改个人资料（基于情绪变化）
                 # 注意：只有 AiocqhttpMessageEvent 才有 bot 属性
-                if self.profile_manager and isinstance(event, AiocqhttpMessageEvent):
+                if self.auto_profile_updater and isinstance(event, AiocqhttpMessageEvent):
+                    # 计算情绪强度
+                    intensity_map = {
+                        EmotionType.EXCITED: 0.9,
+                        EmotionType.HAPPY: 0.6,
+                        EmotionType.SAD: 0.7,
+                        EmotionType.ANGRY: 0.8,
+                        EmotionType.SURPRISED: 0.7,
+                        EmotionType.ANXIOUS: 0.8,
+                        EmotionType.BORED: 0.4,
+                        EmotionType.CONFUSED: 0.5,
+                        EmotionType.CURIOUS: 0.6,
+                        EmotionType.CALM: 0.2
+                    }
+                    intensity = intensity_map.get(emotion, 0.5)
+                    
+                    # 异步调用Profile更新
                     asyncio.create_task(self._auto_update_profile_on_emotion(
-                        bot=event.bot,  # type: ignore
-                        emotion=emotion
+                        event=event,
+                        emotion=emotion,
+                        intensity=intensity
                     ))
         else:
             logger.debug("情绪检测功能未启用")  # 终端日志
@@ -445,51 +697,38 @@ class Main(Star):
         logger.debug(f"情绪分析完成，结果: {result['emotion'].value if result['emotion'] else '无'}, 自拍: {result['should_selfie']}")  # 终端日志
         return result
     
-    async def _auto_update_profile_on_emotion(self, bot, emotion: EmotionType):
+    async def _auto_update_profile_on_emotion(self, event: AiocqhttpMessageEvent, emotion: EmotionType, intensity: float):
         """
         根据情绪自动更新个人资料
         
         Args:
-            bot: aiocqhttp bot 实例
+            event: 消息事件
             emotion: 当前情绪
+            intensity: 情绪强度（0-1）
         """
-        if not self.profile_manager:
+        if not self.auto_profile_updater:
             return
         
         try:
-            # 获取人设
-            persona_profile = ""
-            try:
-                persona_mgr = self.context.persona_manager
-                default_persona = await persona_mgr.get_default_persona_v3()
-                persona_profile = default_persona["prompt"] or ""
-            except Exception:
-                pass
+            # 获取LLM操作实例（用于生成头像）
+            llm_action = None
+            if self.enable_auto_avatar and hasattr(self, 'llm'):
+                llm_action = self.llm
             
-            # 计算情绪强度（基于情绪类型）
-            intensity_map = {
-                EmotionType.EXCITED: 0.9,
-                EmotionType.HAPPY: 0.6,
-                EmotionType.SAD: 0.7,
-                EmotionType.ANGRY: 0.8,
-                EmotionType.SURPRISED: 0.7,
-                EmotionType.ANXIOUS: 0.8,
-                EmotionType.BORED: 0.4,
-                EmotionType.CONFUSED: 0.5,
-                EmotionType.CURIOUS: 0.6,
-                EmotionType.CALM: 0.2
-            }
-            intensity = intensity_map.get(emotion, 0.5)
-            
-            # 尝试自动更新
-            await self.profile_manager.auto_update_on_emotion_change(
-                bot=bot,
-                current_emotion=emotion,
+            # 调用更新器
+            result = await self.auto_profile_updater.check_and_update(
+                event=event,
+                emotion=emotion.value,
                 intensity=intensity,
-                persona_profile=persona_profile
+                llm_action=llm_action
             )
+            
+            # 记录更新结果
+            if any(result.values()):
+                updates = [k for k, v in result.items() if v]
+                logger.info(f"[Profile更新] 已更新: {', '.join(updates)}")
         except Exception as e:
-            logger.error(f"自动更新个人资料失败: {e}")
+            logger.error(f"[自动更新Profile] 失败: {e}", exc_info=True)
     
     def _update_favorability(self, event: AstrMessageEvent) -> None:
         """根据会话活动简单累计好感度"""
@@ -500,21 +739,86 @@ class Main(Star):
         current = self.favorability.get(session_id, 0.0)
         self.favorability[session_id] = current + 1.0
     
+    async def _get_persona_profile(self) -> str:
+        """
+        获取人设配置，优先使用插件配置，其次使用系统人设
+        
+        Returns:
+            人设描述文本
+        """
+        # 1. 优先使用插件自己的人设配置
+        if self.persona_profile and self.persona_profile.strip():
+            logger.debug("使用插件配置的人设")
+            return self.persona_profile.strip()
+        
+        # 2. 回退到系统人设
+        try:
+            persona_mgr = self.context.persona_manager
+            default_persona = await persona_mgr.get_default_persona_v3()
+            system_profile = default_persona.get("prompt", "")
+            if system_profile:
+                logger.debug("使用系统配置的人设")
+                return system_profile
+        except Exception as e:
+            logger.debug(f"获取系统人设失败: {e}")
+        
+        # 3. 都没有则返回空
+        logger.debug("未配置人设，使用空字符串")
+        return ""
+    
     # ========== LLM请求钩子 ==========
     
     @filter.on_llm_request()
     async def on_llm_request_handler(self, event: AstrMessageEvent, request, *args, **kwargs):
+        """存储请求事件，供响应后使用"""
+        # 保存event到实例变量，供后续使用
+        self._current_event = event
+        return await self._on_llm_request_handler(event, request, *args, **kwargs)
+    
+    async def _on_llm_request_handler(self, event: AstrMessageEvent, request, *args, **kwargs):
         """LLM 请求前处理：注入情绪信息与"生活模拟"上下文"""
         analysis: Optional[Dict] = None
+        
+        # 人生故事引擎：自动更新经历线并注入上下文
+        if self.enable_async_thinking and self.life_story_engine:
+            try:
+                # 设置基础人设（仅首次）
+                current_persona = self._get_persona()
+                if current_persona:
+                    self.life_story_engine.set_base_persona(current_persona)
+                
+                # 检查是否需要更新经历线
+                if self.life_story_engine.should_update():
+                    # 异步更新，不阻塞当前对话
+                    if hasattr(self, 'llm') and self.llm:
+                        asyncio.create_task(self._update_life_story_async())
+                        logger.info("[人生故事] 后台更新经历线已触发")
+                
+                # 获取精简的上下文提示
+                story_context = self.life_story_engine.get_context_for_llm()
+                if story_context:
+                    context_hint = f"\n[背景上下文]\n{story_context}"
+                    if hasattr(request, "system_prompt"):
+                        if request.system_prompt:
+                            request.system_prompt += context_hint
+                        else:
+                            request.system_prompt = context_hint
+                    logger.debug(f"[人生故事] 已注入上下文，长度: {len(story_context)}字符")
+                
+            except Exception as e:
+                logger.error(f"人生故事引擎处理失败: {e}")
         
         # 情绪与上下文事件分析
         if self.enable_emotion_detection:
             try:
+                logger.debug("[情绪检测] 开始分析用户消息...")
                 analysis = await self._process_emotion_and_events(event)
                 if analysis and analysis.get("emotion"):
                     emotion = analysis["emotion"]
                     session_id = event.get_session_id()
                     emotion_context = self._get_emotion_context(session_id)
+                    
+                    logger.info(f"[情绪检测] 检测到用户情绪: {emotion.value}")
                     
                     # 将情绪信息添加到系统提示中
                     emotion_info = f"\n[当前检测到用户情绪: {emotion.value}]"
@@ -554,8 +858,10 @@ class Main(Star):
                 is_simple_question = any(greeting in user_message.lower() for greeting in simple_greetings)
                 
                 if not is_simple_question and len(user_message) > 5:
+                    logger.debug("[生活模拟] 开始构建生活上下文信息...")
                     life_info = await self._build_life_context_info(event, analysis)
                     if life_info:
+                        logger.info(f"[生活模拟] 已注入背景信息：{life_info[:50]}...")  # 只显示前50字符
                         # 作为辅助信息添加，不是主要上下文
                         life_context = f"\n\n[背景信息 - 仅供参考，不影响主要回答]\n{life_info}"
                         if hasattr(request, "system_prompt"):
@@ -623,7 +929,7 @@ class Main(Star):
         """记录用户交互到经历银行"""
         if not self.experience_bank:
             return
-            
+                
         try:
             # 记录对话
             self.experience_bank.record_conversation(
@@ -633,7 +939,44 @@ class Main(Star):
                 session_id=session_id
             )
                 
-            # 从用户消息中提取技能、兴趣等，自动更新成長追蹤
+            # 主动消息：更新最后互动时间并调度空闲问候
+            if self.enable_proactive_messages:
+                current_time = time.time()
+                last_interaction_time = self.context_state.get_state(session_id, "last_interaction_time", 0)
+                    
+                # 更新最后互动时间
+                self.context_state.update_state(session_id, "last_interaction_time", current_time)
+                    
+                # 清除该会话之前调度的主动消息（因为用户已经发消息）
+                self.proactive_manager.clear_scheduled_messages(session_id)
+                    
+                # 调度一条新的主动消息（在空闲延迟后发送）
+                proactive_msg = self._generate_proactive_greeting()
+                
+                # 获取用户信息用于后续发送
+                user_id = session_id
+                platform = "unknown"
+                try:
+                    # 尝试从event中获取平台信息
+                    if hasattr(self, '_current_event') and self._current_event:
+                        if hasattr(self._current_event, 'platform_meta'):
+                            platform = self._current_event.platform_meta.platform_name
+                except Exception:
+                    pass
+                
+                self.proactive_manager.schedule_message(
+                    message=proactive_msg,
+                    delay=self.idle_greeting_delay,
+                    session_id=session_id,
+                    context_data={
+                        "triggered_by": "idle_detection",
+                        "user_id": user_id,
+                        "platform": platform
+                    }
+                )
+                logger.debug(f"[主动消息] 已调度空闲问候，{self.idle_greeting_delay}秒后发送")
+                    
+            # 从用户消息中提取技能、兴趣等，自动更新成長追踪
             self._extract_and_update_growth(user_message)
                 
             # 检测并记录长期项目
@@ -875,6 +1218,62 @@ class Main(Star):
         except Exception as e:
             logger.debug(f"[关系网络] 分析失败: {e}")
     
+    async def _update_life_story_async(self):
+        """异步更新人生故事（后台任务）"""
+        try:
+            logger.info("[人生故事] 开始异步更新经历线...")
+            
+            # 确保LLM可用
+            if not hasattr(self, 'llm') or not self.llm:
+                logger.warning("[人生故事] LLM未初始化，跳过更新")
+                return
+            
+            # 执行更新
+            success = await self.life_story_engine.update_life_story(self.llm)
+            
+            if success:
+                logger.info("[人生故事] 经历线更新成功")
+            else:
+                logger.warning("[人生故事] 经历线更新失败")
+                
+        except Exception as e:
+            logger.error(f"[人生故事] 异步更新失败: {e}", exc_info=True)
+    
+    async def _send_proactive_message(self, message: str, session_id: str, context_data: dict):
+        """发送主动消息的回调函数
+        
+        Args:
+            message: 消息内容
+            session_id: 会话 ID
+            context_data: 上下文数据
+        """
+        try:
+            logger.info(f"[主动消息] 准备发送到会话 {session_id}: {message[:50]}...")
+            
+            # 这里需要根据平台类型发送消息
+            # 目前先记录日志，实际发送需要平台特定的API
+            # TODO: 实现实际的消息发送逻辑
+            logger.warning("[主动消息] 发送功能尚未完全实现，需要平台API支持")
+            
+        except Exception as e:
+            logger.error(f"[主动消息] 发送失败: {e}", exc_info=True)
+    
+    def _generate_proactive_greeting(self) -> str:
+        """生成主动问候消息
+        
+        Returns:
+            问候消息字符串
+        """
+        greetings = [
+            "在吗？最近怎么样？😊",
+            "很久没聊天了，忙吗？",
+            "很久不见，有空聊聊吗？",
+            "喜，在忙什么呢？",
+            "最近过得好吗？😌",
+            "有空聊聊天吗？好久不见了！",
+        ]
+        return random.choice(greetings)
+    
     def _get_provider_id(self) -> Optional[str]:
         """获取当前使用的 LLM 提供者 ID"""
         try:
@@ -924,22 +1323,35 @@ class Main(Star):
             weather_hint = f"当地天气：{weather_desc}。请根据天气选择合适的穿着（例如：下雨带伞、寒冷穿厚衣、热天穿薄衣）。\n"
         else:
             weather_hint = "请根据当剋季节和常规天气选择合适的穿着。\n"
-            
-        prompt = (
-            f"你是{self.persona_name}，{persona_profile}。\n"
-            f"今天是{today_str}。\n"
-            f"{weather_hint}\n"
-            "请详细规划今天的生活：\n\n"
-            "1. 今日穿搭：根据人设、当地天气和今天的活动，描述具体穿着（上衣、下装、鞋子、外套/配饰等），必须符合天气情况、角色性格和身份\n"
-            "2. 早上（6:00-9:00）：起床时间、洗漱、早餐、出门准备等具体活动\n"
-            "3. 上午（9:00-12:00）：主要活动（工作/上课/其他），具体在做什么\n"
-            "4. 中午（12:00-14:00）：午餐地点和内容、午休安排\n"
-            "5. 下午（14:00-18:00）：下午的具体安排和活动\n"
-            "6. 前晚（18:00-20:00）：晚餐、休闲活动\n"
-            "7. 晚上（20:00-23:00）：娱乐、学习、社交等活动\n"
-            "8. 睡前（23:00-24:00）：洗漱、放松、睡觉准备\n\n"
-            "要求：口语化表达，贴近真实人类生活，不要提到AI。每个时段1-2句话即可。"
-        )
+        
+        # 使用自定义提示词或默认提示词
+        if self.schedule_prompt and self.schedule_prompt.strip():
+            # 使用用户自定义的提示词
+            custom_prompt = self.schedule_prompt.strip()
+            # 替换模板变量
+            custom_prompt = custom_prompt.replace("{persona_name}", self.persona_name)
+            custom_prompt = custom_prompt.replace("{persona_profile}", persona_profile)
+            custom_prompt = custom_prompt.replace("{today}", today_str)
+            custom_prompt = custom_prompt.replace("{weather}", weather_desc or "未知")
+            prompt = custom_prompt
+            logger.info("使用自定义日程生成提示词")
+        else:
+            # 使用默认提示词
+            prompt = (
+                f"你是{self.persona_name}，{persona_profile}。\n"
+                f"今天是{today_str}。\n"
+                f"{weather_hint}\n"
+                "请直接输出今天的详细生活安排：\n\n"
+                "1. 今日穿搭：根据人设、当地天气和今天的活动，描述具体穿着（上衣、下装、鞋子、外套/配饰等），必须符合天气情况、角色性格和身份\n"
+                "2. 早上（6:00-9:00）：起床时间、洗漱、早餐、出门准备等具体活动\n"
+                "3. 上午（9:00-12:00）：主要活动（工作/上课/其他），具体在做什么\n"
+                "4. 中午（12:00-14:00）：午餐地点和内容、午休安排\n"
+                "5. 下午（14:00-18:00）：下午的具体安排和活动\n"
+                "6. 前晚（18:00-20:00）：晚餐、休闲活动\n"
+                "7. 晚上（20:00-23:00）：娱乐、学习、社交等活动\n"
+                "8. 睡前（23:00-24:00）：洗漱、放松、睡觉准备\n\n"
+                "重要：直接输出日程内容，不要添加任何确认、回复或解释性的话。用口语化表达，贴近真实人类生活，不要提到AI。每个时段1-2句话即可。"
+            )
             
         logger.info(f"开始生成 {today_str} 的日程")
         try:
@@ -977,58 +1389,92 @@ class Main(Star):
         # 保存到本地数据管理器
         self.local_data_manager.save_schedule_data(today_str, schedule_text)
         
+        # 更新配置文件中的显示项
+        try:
+            self.config["today_schedule_display"] = f"[当前日程 - {today_str}]\n\n{schedule_text}"
+            # 保存配置（如果支持）
+            if hasattr(self.config, 'save_config'):
+                self.config.save_config()
+            logger.debug(f"已更新配置中的日程显示")
+        except Exception as e:
+            logger.debug(f"更新配置显示失败: {e}")
+        
         return schedule_text
     
     async def _maybe_fetch_news(self, now: datetime) -> str:
-        """在需要时获取角色关注的早间新闻（使用本地数据管理器优化）"""
+        """在需要时获取角色关注的早间新闻（基于独立新闻获取模块的实现）"""
         today_str = now.strftime("%Y-%m-%d")
         
-        # 首先尝试从本地数据管理器获取
-        cached_news = self.local_data_manager.get_news_data(today_str)
-        if cached_news:
-            logger.info(f"从本地数据获取 {today_str} 的新闻信息")
-            # 更新缓存
-            self._news_cache = {"data": cached_news, "date": today_str}
-            return cached_news
-        
-        # 检查缓存
-        if self._news_cache["date"] == today_str and self._news_cache["data"]:
-            logger.debug(f"使用缓存的新闻: {today_str}")
-            return self._news_cache["data"]
-        
+        # 检查是否应该获取新闻（在指定时间后）
         if now.hour < self.news_hour:
             logger.debug(f"当前时间 {now.hour} 小于新闻获取时间 {self.news_hour}，跳过获取")
             return ""
         
-        provider_id = self._get_provider_id()
-        if not provider_id:
-            logger.warning("未找到可用的LLM提供者，无法获取新闻")
-            return ""
+        # 首先尝试从本地缓存获取
+        if self.news_getter:
+            cached_news = self.news_getter.load_news_cache(today_str)
+            if cached_news:
+                logger.info(f"从本地缓存加载新闻: {today_str}")
+                news_text = self.news_getter.generate_news_text(cached_news)
+                self._news_cache = {"data": news_text, "date": today_str}
+                return news_text
+        
+        # 检查内存缓存
+        if self._news_cache["date"] == today_str and self._news_cache["data"]:
+            logger.debug(f"使用内存缓存的新闻: {today_str}")
+            return self._news_cache["data"]
         
         news_text = ""
-        topics = ", ".join(self.news_topics)
-        # Token优化：精简提示词
-        prompt = (
-            f"联网搜索{today_str}早间新闻，关注{topics}，"
-            f"列出3条标题+简述。"
-        )
         
-        logger.info(f"开始获取 {today_str} 的早间新闻")
-        try:
-            resp = await self.context.llm_generate(
-                chat_provider_id=provider_id,
-                prompt=prompt,
-            )
-            news_text = (resp.completion_text or "").strip()
-            
-            if not news_text or len(news_text) < 20:
-                logger.warning("LLM未能成功获取新闻，可能是联网工具未启用")
-                news_text = ""
-            else:
-                logger.info(f"新闻获取成功，长度: {len(news_text)} 字符")
-        except Exception as e:
-            logger.error(f"获取新闻失败: {e}")
-            news_text = ""
+        # 优先使用新闻获取模块获取
+        if self.enable_news_getter and self.news_getter:
+            try:
+                logger.info(f"开始通过新闻获取模块获取 {today_str} 的早间新闻")
+                news_data = await self.news_getter.fetch_news_data(self.news_topics)
+                
+                if news_data:
+                    news_text = self.news_getter.generate_news_text(news_data)
+                    logger.info(f"新闻获取成功，长度: {len(news_text)} 字符")
+                    
+                    # 保存到缓存
+                    self.news_getter.save_news_cache(today_str, news_data)
+                else:
+                    logger.warning(f"新闻获取模块未能获取新闻")
+            except Exception as e:
+                logger.error(f"新闻获取模块出错: {e}")
+        
+        # 如果新闻获取模块失败，回退到LLM联网搜索
+        if not news_text:
+            try:
+                logger.info(f"回退到LLM联网搜索获取 {today_str} 的新闻")
+                provider_id = self._get_provider_id()
+                
+                if provider_id:
+                    topics = ", ".join(self.news_topics)
+                    
+                    # 使用自定义提示词或默认提示词
+                    if self.news_prompt and self.news_prompt.strip():
+                        custom_prompt = self.news_prompt.strip()
+                        custom_prompt = custom_prompt.replace("{today}", today_str)
+                        custom_prompt = custom_prompt.replace("{topics}", topics)
+                        prompt = custom_prompt
+                        logger.info("使用自定义新闻获取提示词")
+                    else:
+                        prompt = f"联网搜索{today_str}早间新闻，关注{topics}，列出3条标题+简述。"
+                    
+                    resp = await self.context.llm_generate(
+                        chat_provider_id=provider_id,
+                        prompt=prompt,
+                    )
+                    news_text = (resp.completion_text or "").strip()
+                    
+                    if news_text and len(news_text) >= 20:
+                        logger.info(f"LLM联网搜索成功，长度: {len(news_text)} 字符")
+                    else:
+                        logger.warning("LLM未能成功获取新闻")
+                        news_text = ""
+            except Exception as e:
+                logger.error(f"LLM联网搜索失败: {e}")
         
         # 更新缓存
         self._news_cache = {"data": news_text, "date": today_str}
@@ -1312,10 +1758,13 @@ class Main(Star):
     @filter.llm_tool(name="draw")
     async def draw(self, event: AstrMessageEvent, prompt: str, size: str = "1080x1920"):
         '''根据提示词生成图片，支持AI自拍和情绪表达
-        
+            
         Args:
-            prompt(string): 图片提示词，应包含主体、场景、风格等必要信息。例如："一个开心微笑的中国女孩，真实风格，明亮色彩"
-            size(string): 图片尺寸，默认为1080x1920。可选项：1920x1024（横屏）、1024x1024（方形）等
+            prompt (str): 图片提示词，应包含主体、场景、风格等必要信息。例如：“一个开心微笑的中国女孩，真实风格，明亮色彩”
+            size (str): 图片尺寸，默认为1080x1920。可选项：1920x1024（横屏）、1024x1024（方形）等
+            
+        Returns:
+            str: 返回给LLM的指示信息
         '''
         
         logger.info(f"[绘图工具] 被调用 - prompt: {prompt[:50]}..., size: {size}")
@@ -1493,8 +1942,19 @@ class Main(Star):
         
         from .core.utils import get_image_urls
         
+        # 获取人设（优先使用插件配置，其次系统人设）
+        persona_profile = await self._get_persona_profile()
+        
         # 使用LLM生成说说内容
-        text = await self.llm.generate_diary(group_id=event.get_group_id(), topic=topic)
+        text = await self.llm.generate_diary(group_id=event.get_group_id(), topic=topic, persona_profile=persona_profile)
+        
+        # 检查是否生成成功
+        if not text:
+            await event.send(event.plain_result("生成说说内容失败，请检查LLM配置或重试"))
+            logger.error("[写说说] generate_diary 返回空内容")
+            return
+        
+        logger.info(f"[写说说] 生成的说说内容: {text}")
         
         # 获取用户上传的图片
         images = await get_image_urls(event)
@@ -1508,8 +1968,17 @@ class Main(Star):
                 logger.info("提示：如需自动配图，请在插件配置中设置 ms_api_key")
             else:
                 try:
-                    # 生成图片提示词
-                    image_prompt = await self.llm.generate_image_prompt_from_diary(text)
+                    # 获取配置的user_id和group_id
+                    user_id = self.config.get("diary_user_id", "")
+                    group_id = event.get_group_id() or ""
+                    logger.info(f"[写说说] 配置的user_id: {user_id}, group_id: {group_id}")
+                    
+                    # 生成图片提示词，传入user_id和group_id
+                    image_prompt = await self.llm.generate_image_prompt_from_diary(
+                        text,
+                        group_id=group_id,
+                        user_id=user_id
+                    )
                     if image_prompt:
                         logger.info(f"[写说说] 生成的配图提示词: {image_prompt}")
                         # 调用ModelScope生图
@@ -1522,9 +1991,324 @@ class Main(Star):
                     else:
                         logger.warning("[写说说] 无法生成图片提示词")
                 except Exception as e:
-                    logger.error(f"[写说说] 自动配图失败: {e}")
+                    logger.error(f"[写说说] 自动配图失败: {e}", exc_info=True)
         else:
             logger.info(f"[写说说] 使用用户上传的图片: {len(images)}张")
         
         # 直接发布，不保存草稿
         await self.operator.publish_feed(event, text, images, publish=True)
+    
+    # ==========  工具调用解析 ==========
+    
+    @staticmethod
+    def parse_tool_call(text: str) -> Optional[Dict]:
+        """
+        解析 MiniMax 工具调用格式
+        
+        示例格式:
+        <minimax:tool_call>
+        invoke name="draw"
+        <prompt>描述</prompt>
+        <parameter name="size">1024x1024</parameter>
+        </invoke>
+        </minimax:tool_call>
+        
+        Returns:
+            字典: {"tool_name": "draw", "prompt": "...", "size": "..."} 或 None
+        """
+        if "<minimax:tool_call>" not in text:
+            return None
+        
+        try:
+            import re
+            
+            # 提取工具名称
+            tool_match = re.search(r'invoke name="([^"]+)"', text)
+            if not tool_match:
+                logger.debug("[工具调用] 未找到工具名称")
+                return None
+            
+            tool_name = tool_match.group(1)
+            logger.debug(f"[工具调用] 解析到工具名称: {tool_name}")
+            
+            # 提取prompt（使用 re.DOTALL 匹配换行符）
+            # 先尝试正常格式
+            prompt_match = re.search(r'<prompt>\s*(.+?)\s*</prompt>', text, re.DOTALL)
+            if prompt_match:
+                prompt = prompt_match.group(1).strip()
+                logger.debug(f"[工具调用] 解析到prompt (正常格式): {prompt[:100]}...")
+            else:
+                # MiniMax有时会错误地使用 </parameter> 而不是 </prompt>
+                # 格式: <prompt>...内容...</parameter>
+                alt_match = re.search(r'<prompt>\s*(.+?)\s*</parameter>', text, re.DOTALL)
+                if alt_match:
+                    # 提取内容，但需要移除后续的 <parameter 标签
+                    full_content = alt_match.group(1)
+                    # 分离出真正的prompt和可能混入的parameter标签
+                    param_tag_match = re.search(r'^(.+?)(?=<parameter)', full_content, re.DOTALL)
+                    if param_tag_match:
+                        prompt = param_tag_match.group(1).strip()
+                    else:
+                        prompt = full_content.strip()
+                    logger.debug(f"[工具调用] 解析到prompt (替代格式): {prompt[:100]}...")
+                else:
+                    prompt = ""
+                    logger.warning("[工具调用] 未找到prompt内容")
+            
+            # 提取参数
+            params = {"prompt": prompt}
+            param_matches = re.findall(r'<parameter name="([^"]+)">([^<]+)</parameter>', text)
+            for param_name, param_value in param_matches:
+                params[param_name] = param_value.strip()
+                logger.debug(f"[工具调用] 解析到参数 {param_name}: {param_value.strip()}")
+            
+            return {
+                "tool_name": tool_name,
+                **params
+            }
+        except Exception as e:
+            logger.error(f"[工具调用] 解析失败: {e}")
+            return None
+    
+    async def _enhance_drawing_prompt(self, original_prompt: str, event: Optional[AstrMessageEvent] = None) -> str:
+        """
+        增强绘画提示词，结合人设、历史对话、日程和天气
+        
+        Args:
+            original_prompt: 原始提示词（来自LLM）
+            event: 当前事件（用于获取历史对话）
+        
+        Returns:
+            增强后的提示词
+        """
+        try:
+            now = datetime.now()
+            today_str = now.strftime("%Y-%m-%d")
+            
+            # 获取人设信息
+            persona_profile = self._get_persona_profile()
+            if not persona_profile:
+                persona_profile = await self._get_system_persona_profile()
+            
+            # 获取天气信息
+            weather_desc = await self._get_weather_desc()
+            
+            # 获取日程信息
+            schedule_text = await self._maybe_generate_schedule(now)
+            
+            # 提取今日穿搭信息
+            outfit = ""
+            if schedule_text and ("今日穿搭" in schedule_text or "穿搭" in schedule_text):
+                lines = schedule_text.split("\n")
+                for line in lines:
+                    if "今日穿搭" in line or "穿搭" in line or "穿着" in line:
+                        outfit = line.replace("今日穿搭：", "").replace("穿搭：", "").strip()
+                        break
+            
+            # 获取历史对话摘要（最近几条）
+            conversation_context = ""
+            if event and hasattr(event, 'message_obj'):
+                try:
+                    # 获取会话ID
+                    session_id = event.get_session_id()
+                    # 尝试从上下文获取最近的对话
+                    if hasattr(self, 'context') and hasattr(self.context, 'conversation_mgr'):
+                        recent_messages = await self.context.conversation_mgr.get_messages(
+                            session_id=session_id,
+                            count=5
+                        )
+                        if recent_messages:
+                            # 提取文本内容
+                            msg_texts = []
+                            for msg in recent_messages[-3:]:  # 只取最近3条
+                                if hasattr(msg, 'message'):
+                                    msg_texts.append(str(msg.message)[:100])  # 限制长度
+                            if msg_texts:
+                                conversation_context = "最近对话：" + " -> ".join(msg_texts)
+                except Exception as e:
+                    logger.debug(f"[绘画提示词增强] 获取历史对话失败: {e}")
+            
+            # 获取历史绘画提示词（最近几次）
+            drawing_history = ""
+            try:
+                recent_prompts = self.local_data_manager.get_recent_drawing_prompts(days=2, max_count=3)
+                if recent_prompts:
+                    history_items = []
+                    for item in recent_prompts:
+                        original = item.get("original_prompt", "")[:50]
+                        history_items.append(original)
+                    if history_items:
+                        drawing_history = "历史绘画：" + "；".join(history_items)
+                        logger.debug(f"[绘画提示词增强] 加载了{len(history_items)}条历史绘画提示词")
+            except Exception as e:
+                logger.debug(f"[绘画提示词增强] 获取历史绘画提示词失败: {e}")
+            
+            # 构建增强后的提示词
+            enhanced_parts = []
+            
+            # 1. 核心绘画内容（原始prompt）
+            enhanced_parts.append(f"画面内容：{original_prompt}")
+            
+            # 2. 人物形象（基于人设）
+            if persona_profile:
+                # 提取关键外貌特征
+                age_match = re.search(r'(\d+)岁', persona_profile)
+                gender_hints = []
+                if "女" in persona_profile or "她" in persona_profile:
+                    gender_hints.append("女性")
+                elif "男" in persona_profile or "他" in persona_profile:
+                    gender_hints.append("男性")
+                
+                appearance_desc = ""
+                if age_match:
+                    appearance_desc += f"{age_match.group(1)}岁"
+                if gender_hints:
+                    appearance_desc += gender_hints[0]
+                
+                if appearance_desc:
+                    enhanced_parts.append(f"人物：{appearance_desc}")
+            
+            # 3. 穿搭信息（确保一致性）
+            if outfit:
+                enhanced_parts.append(f"穿着：{outfit}")
+            
+            # 4. 天气和场景氛围
+            if weather_desc:
+                enhanced_parts.append(f"天气：{weather_desc}")
+            
+            # 5. 时间信息
+            hour = now.hour
+            if 5 <= hour < 8:
+                time_desc = "清晨，柔和的晨光"
+            elif 8 <= hour < 12:
+                time_desc = "上午，明亮的日光"
+            elif 12 <= hour < 14:
+                time_desc = "中午，强烈的阳光"
+            elif 14 <= hour < 18:
+                time_desc = "下午，温暖的光线"
+            elif 18 <= hour < 20:
+                time_desc = "傍晚，金色的夕阳"
+            elif 20 <= hour < 22:
+                time_desc = "夜晚，柔和的灯光"
+            else:
+                time_desc = "深夜，昏暗的光线"
+            
+            enhanced_parts.append(f"时间：{time_desc}")
+            
+            # 6. 风格要求
+            style_desc = "风格：真实摄影风格，自然光线，高清细节"
+            
+            # 从配置文件读取绘画禁止规则
+            forbidden_rules = self.config.get("image_forbidden_rules", "").strip()
+            if forbidden_rules:
+                style_desc += "。" + forbidden_rules
+            
+            enhanced_parts.append(style_desc)
+            
+            # 合并所有部分
+            enhanced_prompt = "，".join(enhanced_parts)
+            
+            # 保存到本地
+            try:
+                self.local_data_manager.save_drawing_prompt(original_prompt, enhanced_prompt)
+            except Exception as e:
+                logger.debug(f"[绘画提示词增强] 保存失败: {e}")
+            
+            logger.info(f"[绘画提示词增强] 原始: {original_prompt[:50]}...")
+            logger.info(f"[绘画提示词增强] 增强后: {enhanced_prompt[:100]}...")
+            
+            return enhanced_prompt
+            
+        except Exception as e:
+            logger.error(f"[绘画提示词增强] 失败: {e}", exc_info=True)
+            # 出错时返回原始提示词
+            return original_prompt
+    
+    async def execute_tool_call(self, tool_name: str, params: Dict) -> Optional[str]:
+        """
+        执行工具调用
+        
+        Args:
+            tool_name: 工具名称
+            params: 参数字典
+        
+        Returns:
+            图片URL 或 None
+        """
+        if tool_name == "draw":
+            original_prompt = params.get("prompt", "")
+            if not original_prompt:
+                logger.warning("[工具调用] draw 工具缺少 prompt 参数")
+                return None
+            
+            # 检查 LLM 是否初始化
+            if not hasattr(self, 'llm') or not self.llm:
+                logger.warning("[工具调用] LLM 未初始化，无法调用绘图")
+                return None
+            
+            # 检查 API Key
+            if not self.llm.ms_api_key:
+                logger.warning("[工具调用] 未配置 ModelScope API Key")
+                return None
+            
+            try:
+                # 增强绘画提示词，结合人设、历史对话、日程和天气
+                enhanced_prompt = await self._enhance_drawing_prompt(
+                    original_prompt,
+                    event=self._current_event
+                )
+                
+                # 从配置文件获取图片尺寸，如果 LLM 没有指定的话
+                size = params.get("size", self.config.get("size", "1080x1920"))
+                logger.info(f"[工具调用] 开始执行 draw (尺寸: {size})")
+                logger.info(f"[工具调用] 原始提示词: {original_prompt[:100]}...")
+                logger.info(f"[工具调用] 增强提示词: {enhanced_prompt[:100]}...")
+                
+                # 调用 ModelScope API
+                image_url = await self.llm._request_modelscope(enhanced_prompt, size=size)
+                if image_url:
+                    logger.info(f"[工具调用] 绘图成功: {image_url}")
+                    return image_url
+                else:
+                    logger.warning("[工具调用] ModelScope 未返回图片 URL")
+                    return None
+            except Exception as e:
+                logger.error(f"[工具调用] 执行 draw 失败: {e}")
+                return None
+        else:
+            logger.warning(f"[工具调用] 未知的工具: {tool_name}")
+            return None
+    
+    @filter.on_llm_response()
+    async def on_llm_response_handler(self, event: AstrMessageEvent, response_text, *args, **kwargs):
+        """拦截LLM响应，检测并执行工具调用"""
+        # 提取文本内容（response_text 可能是 LLMResponse 对象）
+        if hasattr(response_text, 'completion_text'):
+            text = response_text.completion_text
+        elif isinstance(response_text, str):
+            text = response_text
+        else:
+            text = str(response_text)
+        
+        if not text:
+            return response_text
+        
+        # 检测是否包含工具调用
+        tool_call = self.parse_tool_call(text)
+        if not tool_call:
+            return response_text
+        
+        logger.info(f"[工具调用] 检测到工具调用: {tool_call}")
+        
+        # 执行工具
+        tool_name = tool_call.pop("tool_name")
+        result = await self.execute_tool_call(tool_name, tool_call)
+        
+        if result:
+            # 成功执行，返回图片URL代替工具调用格式
+            logger.info(f"[工具调用] 已将工具调用格式替换为图片URL")
+            # 返回图片markdown格式
+            return f"![image]({result})"
+        else:
+            # 执行失败，返回提示信息
+            return "抱歉，图片生成失败了😥"

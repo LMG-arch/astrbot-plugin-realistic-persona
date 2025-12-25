@@ -160,6 +160,20 @@
     "condition": {"enable_life_simulation": true},
     "hint": "获取新闻时的系统提示词。支持变量：{today} {topics}"
   },
+  "enable_news_getter": {
+    "description": "启用新闻获取模块",
+    "type": "bool",
+    "default": true,
+    "condition": {"enable_life_simulation": true},
+    "hint": "是否使用独立的新闻获取模块（支持多源容错），而非仅依赖LLM联网功能"
+  },
+  "news_online_fetch": {
+    "description": "启用联网获取新闻",
+    "type": "bool",
+    "default": true,
+    "condition": {"enable_news_getter": true},
+    "hint": "是否主动从多个新闻源获取实时新闻数据"
+  },
   "today_schedule_display": {
     "description": "当前日程预览",
     "type": "text",
@@ -294,6 +308,47 @@
     "default": 0.6,
     "condition": {"enable_auto_profile_update": true},
     "hint": "触发更新的情绪强度阈值 (0-1)，越高越不容易触发"
+  },
+  
+  "_section_life_story": {
+    "description": "========== 人生故事引擎配置 ==========\n",
+    "type": "string",
+    "invisible": true
+  },
+  "enable_life_story": {
+    "description": "启用人生故事引擎",
+    "type": "bool",
+    "default": true,
+    "condition": {"enable_async_thinking": true},
+    "hint": "基于原始人设自动构建完整的人生经历线，最小化Token消耗同时保证高质量扮演"
+  },
+  "life_story_update_interval": {
+    "description": "更新间隔(天)",
+    "type": "int",
+    "default": 3,
+    "condition": {"enable_life_story": true},
+    "hint": "人生故事多久更新一次，单位为天"
+  },
+  "life_story_collect_days": {
+    "description": "收集经历范围(天)",
+    "type": "int",
+    "default": 7,
+    "condition": {"enable_life_story": true},
+    "hint": "生成故事时收集最近多少天的经历数据"
+  },
+  "life_story_context_max_length": {
+    "description": "精简上下文最大长度",
+    "type": "int",
+    "default": 200,
+    "condition": {"enable_life_story": true},
+    "hint": "LLM对话中注入的精简上下文最大字符数，范围100-500"
+  },
+  "life_story_cache_days": {
+    "description": "上下文缓存有效期(天)",
+    "type": "int",
+    "default": 7,
+    "condition": {"enable_life_story": true},
+    "hint": "生成的精简上下文缓存多久才需要重新生成"
   },
   
   "_section_advanced": {
