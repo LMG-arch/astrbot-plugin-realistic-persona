@@ -300,7 +300,8 @@ class PostOperator:
             text = await self.llm.generate_diary(persona_profile=persona_profile, user_id=user_id)
 
         # llm配图：根据日记 + 生活信息构造提示词，用 ModelScope 生成图片
-        if llm_images and not images:
+        # 根据用户偏好，如果设置了llm_images=True，则必须尝试生成配图
+        if llm_images:
             diary_for_image = text
             if not diary_for_image:
                 persona_profile = await self._get_persona_profile()
@@ -336,6 +337,8 @@ class PostOperator:
                             text = diary_for_image
                 except Exception as e:
                     logger.error(f"LLM/ModelScope 生成配图失败：{e}", exc_info=True)
+                    # 记录错误但继续执行，因为可能网络或其他临时问题
+                    logger.warning("配图生成失败，但将继续处理")
 
         if not post:
             uin = event.get_self_id() if event else self.uin
@@ -349,6 +352,10 @@ class PostOperator:
                 images=images or [],
                 status="pending",
             )
+            
+            # 根据用户偏好，如果设置了llm_images=True但没有图片，则记录警告
+            if llm_images and not (images and len(images) > 0):
+                logger.warning("[自动发布说说] 根据配置应该生成配图，但配图生成失败或未生成")
         if publish:
             succ, data = await self.qzone.publish(post)
             if not succ:
