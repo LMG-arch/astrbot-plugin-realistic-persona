@@ -1455,7 +1455,31 @@ class Main(Star):
         
         # 使用LLM生成说说内容
         text = await self.llm.generate_diary(group_id=event.get_group_id(), topic=topic)
+        
+        # 获取用户上传的图片
         images = await get_image_urls(event)
+        
+        # 如果没有图片，自动生成配图
+        if not images:
+            logger.info(f"[写说说] 没有上传图片，开始自动生成配图...")
+            try:
+                # 生成图片提示词
+                image_prompt = await self.llm.generate_image_prompt_from_diary(text)
+                if image_prompt:
+                    logger.info(f"[写说说] 生成的配图提示词: {image_prompt}")
+                    # 调用ModelScope生图
+                    image_url = await self.llm._request_modelscope(image_prompt)
+                    if image_url:
+                        images = [image_url]
+                        logger.info(f"[写说说] 配图生成成功: {image_url}")
+                    else:
+                        logger.warning("[写说说] 配图生成失败，ModelScope未返回图片URL")
+                else:
+                    logger.warning("[写说说] 无法生成图片提示词")
+            except Exception as e:
+                logger.error(f"[写说说] 自动配图失败: {e}")
+        else:
+            logger.info(f"[写说说] 使用用户上传的图片: {len(images)}张")
         
         # 直接发布，不保存草稿
         await self.operator.publish_feed(event, text, images, publish=True)

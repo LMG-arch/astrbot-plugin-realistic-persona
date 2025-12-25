@@ -191,8 +191,9 @@ class LLMAction:
         
         life_header = [
             f"今天是 {today_str}（星期{weekday}）。",
-            "你要以第一人称写一篇简短的“今天的 QQ 空间说说/日记”，",
-            "内容要贴近真实人类生活，有起床、上班/上课、吃饭、娱乐、睡前等片段，不要提到自己是 AI。",
+            "你要以第一人称写一条简短的 QQ 空间说说，分享今天的某个生活片段或感受。",
+            "内容要贴近真实人类生活，自然随意，不要提到自己是 AI。",
+            "长度控制在 2-3 句话以内，每句话不超过 30 字。",
         ]
         if persona_profile:
             life_header.append(f"以下是你的角色设定，请保持一致：{persona_profile}")
@@ -201,7 +202,19 @@ class LLMAction:
         life_header_text = "\n".join(life_header) + "\n\n"
         
         # 系统提示，要求使用三对双引号包裹正文
-        diary_prompt = self.config.get("diary_prompt", "请写一篇贴近真实生活的日记，包含今天的活动和感受。")
+        diary_prompt = self.config.get(
+            "diary_prompt", 
+            "写作风格：\n"
+            "- 用口语化、随意的语气，像朋友圈那样轻松\n"
+            "- 可以包含 Emoji 表情增加生动性\n"
+            "- 只写 2-3 句话，简洁明了\n"
+            "- 不要长篇大论，不要流水账式的叙述\n"
+            "- 可以是分享心情、小感慨、有趣的事、即时感受等\n"
+            "\n示例：\n"
+            "- “今天天气超好，在公园晒了一下午的太阳🌞”\n"
+            "- “终于学会了那道难题，感觉自己还是挺聪明的呀😏”\n"
+            "- “晚风很舒服，散步回家的路上看到了超美的晚霞✨”"
+        )
         system_prompt = (
             life_header_text
             + f"# 写作主题：{topic or '从聊天内容中选一个与今天生活相关的主题'}\n\n"
