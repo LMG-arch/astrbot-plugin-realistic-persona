@@ -1346,21 +1346,30 @@ class Main(Star):
             await event.send(event.plain_result("QQ空间功能未启用"))
             return
         
+        # 检查模块是否初始化完成
+        if not hasattr(self, 'operator'):
+            await event.send(event.plain_result("QQ空间模块初始化中，请稍后重试"))
+            logger.warning("发说说命令被调用，但QQ空间模块尚未初始化完成")
+            return
+        
         from .core.utils import get_image_urls
         text = event.message_str.partition(" ")[2]
         images = await get_image_urls(event)
         
         # 直接发布说说，不保存草稿
-        if hasattr(self, 'operator'):
-            await self.operator.publish_feed(event=event, text=text, images=images)
-        else:
-            await event.send(event.plain_result("QQ空间模块未初始化"))
+        await self.operator.publish_feed(event=event, text=text, images=images)
     
     @filter.command("写说说", alias={"写稿", "写草稿"})
     async def write_draft(self, event: AiocqhttpMessageEvent, topic: str | None = None):
         """写说说 <主题> <图片>, 由AI生成说说内容并自动配图"""
         if not self.enable_qzone or not QZONE_AVAILABLE:
             await event.send(event.plain_result("QQ空间功能未启用"))
+            return
+        
+        # 检查模块是否初始化完成
+        if not hasattr(self, 'llm') or not hasattr(self, 'operator'):
+            await event.send(event.plain_result("QQ空间模块初始化中，请稍后重试"))
+            logger.warning("写说说命令被调用，但QQ空间模块尚未初始化完成")
             return
         
         from .core.utils import get_image_urls
@@ -1370,7 +1379,4 @@ class Main(Star):
         images = await get_image_urls(event)
         
         # 直接发布，不保存草稿
-        if hasattr(self, 'operator'):
-            await self.operator.publish_feed(event, text, images, publish=True)
-        else:
-            await event.send(event.plain_result("QQ空间模块未初始化"))
+        await self.operator.publish_feed(event, text, images, publish=True)
