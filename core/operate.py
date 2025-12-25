@@ -359,3 +359,39 @@ class PostOperator:
     #     img_path = await post.to_image(self.style)
     #     await event.send(event.image_result(img_path))
     #     await self.update_dashboard(event)
+    
+    
+    async def auto_reply_to_comments(self):
+        """自动回复评论的功能"""
+        try:
+            # 获取最近的说说
+            succ, data = await self.qzone.get_recent_feeds()
+            if not succ:
+                logger.error("获取最近说说失败")
+                return
+            
+            for post in data:
+                if not post.tid:  # 确保说说ID存在
+                    continue
+                # 获取说说的评论
+                detail = await self.qzone.get_detail(post)
+                
+                # 检查是否有新评论（未回复的）
+                for comment in detail.comments:
+                    # 如果是别人对bot说说的评论，生成回复
+                    if str(comment.uin) != str(self.qzone.ctx.uin):  # 不是自己
+                        # 生成回复内容
+                        reply_text = await self.llm.generate_comment(post)
+                        if reply_text:
+                            # 回复评论
+                            reply_ok, result = await self.qzone.comment(
+                                fid=str(post.tid),
+                                target_id=str(post.uin),
+                                content=f"回复 {comment.nickname}: {reply_text}"
+                            )
+                            if reply_ok:
+                                logger.info(f"成功回复评论 from {comment.nickname}: {reply_text}")
+                            else:
+                                logger.error(f"回复评论失败: {result}")
+        except Exception as e:
+            logger.error(f"自动回复评论时发生错误: {e}")

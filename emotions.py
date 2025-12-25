@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 情绪感知模块
 根据用户消息和上下文分析情绪，并触发相应的AI行为
@@ -6,6 +7,7 @@ from enum import Enum
 from typing import Optional, Dict, List
 import random
 import re
+from astrbot.api import logger
 
 
 class EmotionType(Enum):
@@ -101,10 +103,10 @@ class EmotionAnalyzer:
         # 返回得分最高的情绪
         if emotion_scores:
             detected_emotion = max(emotion_scores.items(), key=lambda x: x[1])[0]
-            print(f"[EMOTION DETECT] 检测到情绪: {detected_emotion.value}, 消息: {message[:50]}...")  # 终端日志
+            logger.debug(f"[EMOTION DETECT] 检测到情绪: {detected_emotion.value}, 消息: {message[:50]}...")
             return detected_emotion
         
-        print(f"[EMOTION DETECT] 未检测到情绪, 消息: {message[:50]}...")  # 终端日志
+        logger.debug(f"[EMOTION DETECT] 未检测到情绪, 消息: {message[:50]}...")
         return None
     
     @classmethod
@@ -139,10 +141,10 @@ class EmotionAnalyzer:
         # 如果配置了should_selfie，且满足随机概率
         if trigger.get("should_selfie", False):
             result = random.random() < random_chance
-            print(f"[SELFIE TRIGGER] 情绪 {emotion.value} 触发自拍检查: {result} (概率 {random_chance})")  # 终端日志
+            logger.debug(f"[SELFIE TRIGGER] 情绪 {emotion.value} 触发自拍检查: {result} (概率 {random_chance})")
             return result
         
-        print(f"[SELFIE TRIGGER] 情绪 {emotion.value} 不支持自拍")  # 终端日志
+        logger.debug(f"[SELFIE TRIGGER] 情绪 {emotion.value} 不支持自拍")
         return False
     
     @classmethod
@@ -187,7 +189,7 @@ class EmotionAnalyzer:
         message_lower = message.lower()
         result = any(keyword in message_lower for keyword in selfie_keywords)
         if result:
-            print(f"[SELFIE REQUEST] 检测到明确自拍请求: {message}")  # 终端日志
+            logger.debug(f"[SELFIE REQUEST] 检测到明确自拍请求: {message}")
         return result
 
 

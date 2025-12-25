@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import random
 import zoneinfo
 from datetime import datetime, timedelta
@@ -143,8 +144,30 @@ class AutoPublish:
         self.scheduler.start()
         self._schedule_daily_posts()
         self._schedule_insomnia_check()
+        self._schedule_comment_check()
         
         logger.info(f"[自动发说说] 已启动，每天{self.publish_times_per_day}次，时间段{self.publish_time_ranges}")
+    
+    def _schedule_comment_check(self):
+        """安排定期检查评论并回复的任务"""
+        # 每10分钟检查一次新评论
+        self.scheduler.add_job(
+            func=self._check_and_reply_comments,
+            trigger=IntervalTrigger(minutes=10, timezone=self.timezone),  # 每10分钟检查一次
+            name="comment_checker",
+            max_instances=1,
+        )
+        logger.info("[自动回复评论] 已启动，每10分钟检查一次")
+    
+    async def _check_and_reply_comments(self):
+        """检查并回复评论"""
+        try:
+            logger.debug("[SCHEDULER] 开始检查新评论并回复")
+            await self.operator.auto_reply_to_comments()
+            logger.debug("[SCHEDULER] 评论检查和回复完成")
+        except Exception as e:
+            logger.error(f"[SCHEDULER] 检查和回复评论失败: {e}")
+            logger.error(f"[自动回复评论] 检查和回复评论失败: {e}")
     
     def _schedule_daily_posts(self):
         """安排每天的发说说任务"""
@@ -157,7 +180,7 @@ class AutoPublish:
         )
         
         # 立即安排今天的任务
-        print("[SCHEDULER] 开始安排今天的发说说任务")  # 终端日志
+        logger.debug("[SCHEDULER] 开始安排今天的发说说任务")
         self._schedule_today_posts()
     
     def _reset_and_schedule_today(self):
@@ -165,7 +188,7 @@ class AutoPublish:
         self.today_publish_count = 0
         self.last_publish_date = datetime.now(self.timezone).strftime("%Y-%m-%d")
         self._schedule_today_posts()
-        print(f"[SCHEDULER] 新的一天开始: {self.last_publish_date}, 重置发布计数器")  # 终端日志
+        logger.debug(f"[SCHEDULER] 新的一天开始: {self.last_publish_date}, 重置发布计数器")
         logger.info("[自动发说说] 新的一天，重置计数器")
     
     def _schedule_today_posts(self):
@@ -175,11 +198,11 @@ class AutoPublish:
         
         # 如果已经安排过今天的任务，不重复安排
         if self.last_publish_date == today_str:
-            print(f"[SCHEDULER] {today_str} 的发布任务已安排，跳过")  # 终端日志
+            logger.debug(f"[SCHEDULER] {today_str} 的发布任务已安排，跳过")
             return
         
         self.last_publish_date = today_str
-        print(f"[SCHEDULER] 开始为 {today_str} 安排 {self.publish_times_per_day} 次发布任务")  # 终端日志
+        logger.debug(f"[SCHEDULER] 开始为 {today_str} 安排 {self.publish_times_per_day} 次发布任务")
         
         # 根据配置的次数和时间段，生成随机时间点
         for i in range(self.publish_times_per_day):
@@ -230,7 +253,7 @@ class AutoPublish:
             
             # 如果时间已经过去，跳过
             if target_time <= now:
-                print(f"[SCHEDULER] 随机时间 {target_time.strftime('%H:%M')} 已过去，跳过")  # 终端日志
+                logger.debug(f"[SCHEDULER] 随机时间 {target_time.strftime('%H:%M')} 已过去，跳过")
                 continue
             
             # 安排任务
@@ -241,7 +264,7 @@ class AutoPublish:
                 max_instances=1,
             )
             
-            print(f"[SCHEDULER] 安排今天第{i+1}次发布: {target_time.strftime('%H:%M')} (时间段 {time_range})")  # 终端日志
+            logger.debug(f"[SCHEDULER] 安排今天第{i+1}次发布: {target_time.strftime('%H:%M')} (时间段 {time_range})")
             logger.info(f"[自动发说说] 安排今天第{i+1}次发布: {target_time.strftime('%H:%M')}")
     
     def _schedule_insomnia_check(self):
@@ -265,10 +288,10 @@ class AutoPublish:
         
         # 按概率触发
         if random.random() > self.insomnia_probability:
-            print(f"[SCHEDULER] 失眠检查 - 时间 {now.strftime('%H:%M')}，概率未达到，跳过")  # 终端日志
+            logger.debug(f"[SCHEDULER] 失眠检查 - 时间 {now.strftime('%H:%M')}，概率未达到，跳过")
             return
         
-        print(f"[SCHEDULER] 失眠检查 - 时间 {now.strftime('%H:%M')}，触发失眠发说说")  # 终端日志
+        logger.debug(f"[SCHEDULER] 失眠检查 - 时间 {now.strftime('%H:%M')}，触发失眠发说说")
         logger.info("[自动发说说] 触发失眠发说说")
         await self._publish_post(insomnia=True)
     
@@ -283,29 +306,29 @@ class AutoPublish:
             
             if not insomnia:
                 if self.today_publish_count >= self.publish_times_per_day:
-                    print(f"[SCHEDULER] 今日发布次数已达上限 {self.publish_times_per_day}，跳过发布")  # 终端日志
+                    logger.debug(f"[SCHEDULER] 今日发布次数已达上限 {self.publish_times_per_day}，跳过发布")
                     logger.info("[自动发说说] 今日发布次数已达上限，跳过")
                     return
                 self.today_publish_count += 1
             
-            print(f"[SCHEDULER] {'(失眠)' if insomnia else ''}开始发布说说，今日第{self.today_publish_count}次")  # 终端日志
+            logger.debug(f"[SCHEDULER] {'(失眠)' if insomnia else ''}开始发布说说，今日第{self.today_publish_count}次")
             
             # 失眠时使用专门的主题生成日记
             if insomnia:
                 # 先生成失眠主题的日记文本
                 text = await self.operator.llm.generate_diary(topic="失眠随想")
-                print(f"[SCHEDULER] 失眠说说内容: {text[:50]}..." if text else "[SCHEDULER] 失眠说说内容: 生成失败")  # 终端日志
+                logger.debug(f"[SCHEDULER] 失眠说说内容: {text[:50]}..." if text else "[SCHEDULER] 失眠说说内容: 生成失败")
                 # 然后调用publish_feed，传入文本和配图选项
                 await self.operator.publish_feed(text=text, llm_images=True)
             else:
                 # 正常发布，让llm自动生成文本和配图
-                print("[SCHEDULER] 正常发布说说，调用LLM生成内容")  # 终端日志
+                logger.debug("[SCHEDULER] 正常发布说说，调用LLM生成内容")
                 await self.operator.publish_feed(llm_text=True, llm_images=True)
             
-            print(f"[SCHEDULER] {'(失眠)' if insomnia else ''}发布成功")  # 终端日志
+            logger.debug(f"[SCHEDULER] {'(失眠)' if insomnia else ''}发布成功")
             logger.info(f"[自动发说说] {'(失眠)' if insomnia else ''}发布成功")
         except Exception as e:
-            print(f"[SCHEDULER] 发布失败: {e}")  # 终端日志
+            logger.error(f"[SCHEDULER] 发布失败: {e}")
             logger.error(f"[自动发说说] 发布失败: {e}")
     
     async def do_task(self):

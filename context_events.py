@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 上下文事件管理模块
 根据状态和行为触发事件，实现主动消息发送
@@ -7,6 +8,7 @@ import asyncio
 import time
 from datetime import datetime
 from enum import Enum
+from astrbot.api import logger
 
 
 class EventType(Enum):
@@ -69,7 +71,7 @@ class EventTrigger:
                 else:
                     handler(event)
             except Exception as e:
-                print(f"事件处理器执行失败: {e}")
+                logger.error(f"事件处理器执行失败: {e}")
     
     def detect_event(self, message: str, context: Optional[Dict] = None) -> List[ContextEvent]:
         """
@@ -220,7 +222,7 @@ class ProactiveMessageManager:
                         msg_data["context_data"]
                     )
                 except Exception as e:
-                    print(f"发送主动消息失败: {e}")
+                    logger.error(f"发送主动消息失败: {e}")
                 
                 self.scheduled_messages.remove(msg_data)
             

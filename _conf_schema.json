@@ -194,5 +194,64 @@
     "default": "",
     "condition": {"enable_qzone": true},
     "hint": "生成评论内容时使用的系统提示"
+  },
+  
+  "_section_async_thinking": {
+    "description": "========== 异步思考系统配置 ==========",
+    "type": "string",
+    "invisible": true
+  },
+  "enable_async_thinking": {
+    "description": "启用异步思考循环",
+    "type": "bool",
+    "default": true,
+    "hint": "是否启用后台定時最思考、经历累积和成長追蹤功能"
+  },
+  
+  "_section_profile_auto_update": {
+    "description": "========== 个人资料自动管理 ==========",
+    "type": "string",
+    "invisible": true
+  },
+  "enable_auto_profile_update": {
+    "description": "启用自动修改昵称和签名",
+    "type": "bool",
+    "default": false,
+    "hint": "根据情绪变化自动修改 QQ 昵称和个性签名"
+  },
+  "enable_auto_nickname": {
+    "description": "启用自动修改昵称",
+    "type": "bool",
+    "default": false,
+    "condition": {"enable_auto_profile_update": true},
+    "hint": "是否自动修改 QQ 昵称（可能需要频繁更新）"
+  },
+  "enable_auto_signature": {
+    "description": "启用自动修改签名",
+    "type": "bool",
+    "default": true,
+    "condition": {"enable_auto_profile_update": true},
+    "hint": "是否自动修改 QQ 个性签名（推荐开启）"
+  },
+  "enable_auto_avatar": {
+    "description": "启用自动生成头像",
+    "type": "bool",
+    "default": false,
+    "condition": {"enable_auto_profile_update": true},
+    "hint": "是否根据情绪自动生成头像并更换（需要 AI 绘图 API）"
+  },
+  "profile_update_cooldown": {
+    "description": "更新冷却时间(秒)",
+    "type": "int",
+    "default": 1800,
+    "condition": {"enable_auto_profile_update": true},
+    "hint": "两次更新之间的最小间隔时间，默认 30 分钟（1800秒）"
+  },
+  "emotion_change_threshold": {
+    "description": "情绪变化阈值",
+    "type": "float",
+    "default": 0.6,
+    "condition": {"enable_auto_profile_update": true},
+    "hint": "触发更新的情绪强度阈值 (0-1)，越高越不容易触发"
   }
 }

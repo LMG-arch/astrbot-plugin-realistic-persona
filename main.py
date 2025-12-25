@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 拟人化角色行为系统插件 (Realistic Persona Plugin)
 整合了情绪感知、生活模拟、QQ空间日记、AI配图等功能
@@ -7,7 +8,7 @@ import asyncio
 import random
 import time
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, cast
 from datetime import datetime
 
 import aiohttp
@@ -40,6 +41,16 @@ from .context_events import (
     ProactiveMessageManager, ContextState
 )
 
+# 导入本地数据管理模块
+from .core.local_data_manager import LocalDataManager
+from .core.thought_engine import ThoughtEngine
+from .core.experience_bank import ExperienceBank
+from .core.async_thinking_scheduler import AsyncThinkingScheduler
+from .core.psychology_engine import PsychologyEngine
+from .core.memory_manager import MemoryManager
+from .core.timeline_verifier import TimelineVerifier
+from .core.profile_manager import ProfileManager
+
 # 导入QQ空间核心模块（如果可用）
 try:
     from .core.llm_action import LLMAction
@@ -63,7 +74,7 @@ class Main(Star):
         super().__init__(context)
         self.context = context
         config = config or {}
-        self.config = config
+        self.config = cast(dict, config)  # 类型注释：确保 config 是 dict 类型
         
         # 检查版本
         if not VersionComparator.compare_version(VERSION, "4.1.0") >= 0:
@@ -118,6 +129,36 @@ class Main(Star):
         self._news_cache = {"data": "", "date": ""}  # 每天缓存一次
         self._schedule_cache = {"data": "", "date": ""}  # 每天缓存一次
         
+        # 初始化本地数据管理器
+        data_dir = StarTools.get_data_dir("astrbot_plugin_realistic_persona") / "local_data"
+        self.local_data_manager = LocalDataManager(data_dir)
+        
+        # 初始化异步思考系统
+        self.enable_async_thinking = config.get("enable_async_thinking", True)
+        self.thought_engine = None
+        self.experience_bank = None
+        self.async_thinking_scheduler = None
+        self.psychology_engine = None
+        self.memory_manager = None
+        self.timeline_verifier = None
+        self.profile_manager = None  # 个人资料管理器
+        
+        if self.enable_async_thinking:
+            thought_dir = StarTools.get_data_dir("astrbot_plugin_realistic_persona") / "thoughts"
+            exp_dir = StarTools.get_data_dir("astrbot_plugin_realistic_persona") / "experience"
+            psych_dir = StarTools.get_data_dir("astrbot_plugin_realistic_persona") / "psychology"
+            mem_dir = StarTools.get_data_dir("astrbot_plugin_realistic_persona") / "memory"
+            timeline_dir = StarTools.get_data_dir("astrbot_plugin_realistic_persona") / "timeline"
+            self.thought_engine = ThoughtEngine(thought_dir)
+            self.experience_bank = ExperienceBank(exp_dir)
+            self.psychology_engine = PsychologyEngine(psych_dir)
+            self.memory_manager = MemoryManager(mem_dir)
+            self.timeline_verifier = TimelineVerifier(timeline_dir)
+            self.async_thinking_scheduler = AsyncThinkingScheduler(
+                self.thought_engine,
+                self.experience_bank
+            )
+        
         # 注册事件处理器
         self._register_event_handlers()
         
@@ -143,6 +184,14 @@ class Main(Star):
     async def initialize(self):
         """插件激活时调用"""
         logger.info("拟人化角色行为系统插件正在加载...")
+        
+        # 启动异步思考循环
+        if self.enable_async_thinking and self.async_thinking_scheduler:
+            try:
+                self.async_thinking_scheduler.start()
+                logger.info("异步思考循环已启动")
+            except Exception as e:
+                logger.error(f"启动异步思考循环失败: {e}")
         
         # 初始化QQ空间相关设置
         if self.enable_qzone and QZONE_AVAILABLE:
@@ -172,13 +221,28 @@ class Main(Star):
     async def terminate(self):
         """插件停用时调用"""
         logger.info("拟人化角色行为系统插件正在卸载...")
-        
+            
+        # 停止异步思考循环
+        if self.enable_async_thinking and self.async_thinking_scheduler:
+            try:
+                self.async_thinking_scheduler.stop()
+                logger.info("异步思考循环已停止")
+            except Exception as e:
+                logger.error(f"停止异步思考循环失败: {e}")
+            
         # 停止主动消息调度器
         if self.proactive_manager:
             self.proactive_manager.stop_scheduler()
         
         # 清空情绪上下文
         self.emotion_contexts.clear()
+        
+        # 清理缓存
+        self._weather_cache.clear()
+        self._news_cache.clear()
+        self._schedule_cache.clear()
+        self.favorability.clear()
+        self.life_state.clear()
         
         # 清理QQ空间相关资源
         if self.enable_qzone and QZONE_AVAILABLE:
@@ -199,7 +263,7 @@ class Main(Star):
         """初始化QQ空间相关模块"""
         if not QZONE_AVAILABLE:
             return
-            
+                
         client = None
         for inst in self.context.platform_manager.platform_insts:
             if isinstance(inst, AiocqhttpAdapter):
@@ -207,45 +271,49 @@ class Main(Star):
                     break
         if not client:
             return
-        
+            
         # 等待 ws 连接完成
         if wait_ws_connected:
             ws_connected = asyncio.Event()
-            
+                
             @client.on_websocket_connection
             def _(_):
                 ws_connected.set()
-            
+                
             try:
                 await asyncio.wait_for(ws_connected.wait(), timeout=10)
             except asyncio.TimeoutError:
                 logger.warning("等待 aiocqhttp WebSocket 连接超时")
-        
+            
         # 加载QQ空间模块
         self.qzone = Qzone(client)
-        
+                
         # llm内容生成器
-        self.llm = LLMAction(self.context, self.config, client)
-        
-        # 加载自动发说说模块
+        self.llm = LLMAction(self.context, self.config, client)  # type: ignore[arg-type]
+                
+        # 输出配置信息
         enable_qzone = self.config.get("enable_qzone", False)
         publish_times = self.config.get("publish_times_per_day", 0)
         insomnia_prob = self.config.get("insomnia_probability", 0)
-        
         logger.info(f"QQ空间配置: enable_qzone={enable_qzone}, publish_times_per_day={publish_times}, insomnia_probability={insomnia_prob}")
-        
-        if enable_qzone and (publish_times > 0 or insomnia_prob > 0):
+                
+        # 加载自动发说说模块
+        if self.config.get("enable_qzone") and (self.config.get("publish_times_per_day", 0) > 0 or self.config.get("insomnia_probability", 0) > 0):
             # 注意：这里只需要简化的发布功能，不需要完整的PostOperator
             from .core.scheduler import AutoPublish
             # 创建简化的operator用于自动发布
-            self.operator = PostOperator(
-                self.context, self.config, self.qzone, None, self.llm, self.style
+            # 注意：db 参数为 None 是临时解决方案，实际运行时不会使用数据库功能
+            self.operator = PostOperator(  # type: ignore[arg-type,call-arg]
+                self.context, self.config, self.qzone, None, self.llm, self.style  # type: ignore[arg-type]
             )
-            self.auto_publish = AutoPublish(self.context, self.config, self.operator)
-            logger.info(f"自动发布模块已加载: 每天{publish_times}次，失眠概率{insomnia_prob}")
-        else:
-            logger.info("自动发布模块未满足加载条件，跳过加载")
+            self.auto_publish = AutoPublish(self.context, self.config, self.operator)  # type: ignore[arg-type]
         
+        # 初始化个人资料管理器
+        if self.config.get("enable_auto_profile_update", False):
+            profile_dir = StarTools.get_data_dir("astrbot_plugin_realistic_persona") / "profile"
+            self.profile_manager = ProfileManager(self.context, self.config, profile_dir)
+            logger.info("个人资料管理器已启用")
+                
         logger.info("QQ空间自动发说说模块加载完毕！")
     
     # ========== 事件处理器注册 ==========
@@ -289,7 +357,7 @@ class Main(Star):
         """处理情绪分析和事件检测"""
         message = event.message_obj.message_str
         session_id = event.get_session_id()
-        logger.debug(f"开始处理会话 {session_id} 的情绪分析，消息: {message[:50]}...")
+
         
         # 更新好感度
         self._update_favorability(event)
@@ -303,6 +371,7 @@ class Main(Star):
         
         # 情绪检测
         if self.enable_emotion_detection:
+            logger.debug("情绪检测已启用，开始分析...")
             emotion = EmotionAnalyzer.analyze_emotion(message)
             if emotion:
                 result["emotion"] = emotion
@@ -318,6 +387,16 @@ class Main(Star):
                         result["should_selfie"] = True
                         result["selfie_prompt"] = EmotionAnalyzer.get_selfie_prompt(emotion)
                         logger.info(f"触发自拍，情绪: {emotion.value}, 提示词: {result['selfie_prompt']}")
+                
+                # 自动修改个人资料（基于情绪变化）
+                # 注意：只有 AiocqhttpMessageEvent 才有 bot 属性
+                if self.profile_manager and isinstance(event, AiocqhttpMessageEvent):
+                    asyncio.create_task(self._auto_update_profile_on_emotion(
+                        bot=event.bot,  # type: ignore
+                        emotion=emotion
+                    ))
+        else:
+            logger.debug("情绪检测功能未启用")  # 终端日志
         
         # 检测明确的自拍请求
         if EmotionAnalyzer.detect_selfie_request(message):
@@ -335,9 +414,57 @@ class Main(Star):
             for evt in events:
                 logger.debug(f"触发事件: {evt.event_type.value}，数据: {evt.data}")
                 await self.event_trigger.trigger_event(evt)
+        else:
+            logger.debug("上下文事件检测未启用")
         
-        logger.debug(f"情绪分析完成，结果: {result['emotion'].value if result['emotion'] else '无'}, 自拍: {result['should_selfie']}")
+        logger.debug(f"情绪分析完成，结果: {result['emotion'].value if result['emotion'] else '无'}, 自拍: {result['should_selfie']}")  # 终端日志
         return result
+    
+    async def _auto_update_profile_on_emotion(self, bot, emotion: EmotionType):
+        """
+        根据情绪自动更新个人资料
+        
+        Args:
+            bot: aiocqhttp bot 实例
+            emotion: 当前情绪
+        """
+        if not self.profile_manager:
+            return
+        
+        try:
+            # 获取人设
+            persona_profile = ""
+            try:
+                persona_mgr = self.context.persona_manager
+                default_persona = await persona_mgr.get_default_persona_v3()
+                persona_profile = default_persona["prompt"] or ""
+            except Exception:
+                pass
+            
+            # 计算情绪强度（基于情绪类型）
+            intensity_map = {
+                EmotionType.EXCITED: 0.9,
+                EmotionType.HAPPY: 0.6,
+                EmotionType.SAD: 0.7,
+                EmotionType.ANGRY: 0.8,
+                EmotionType.SURPRISED: 0.7,
+                EmotionType.ANXIOUS: 0.8,
+                EmotionType.BORED: 0.4,
+                EmotionType.CONFUSED: 0.5,
+                EmotionType.CURIOUS: 0.6,
+                EmotionType.CALM: 0.2
+            }
+            intensity = intensity_map.get(emotion, 0.5)
+            
+            # 尝试自动更新
+            await self.profile_manager.auto_update_on_emotion_change(
+                bot=bot,
+                current_emotion=emotion,
+                intensity=intensity,
+                persona_profile=persona_profile
+            )
+        except Exception as e:
+            logger.error(f"自动更新个人资料失败: {e}")
     
     def _update_favorability(self, event: AstrMessageEvent) -> None:
         """根据会话活动简单累计好感度"""
@@ -405,10 +532,279 @@ class Main(Star):
                 # 即使生活模拟失败，也要确保不影响LLM请求
                 pass
         
+        # 记录用户交互到经历银行（异步思考系统）
+        if self.enable_async_thinking and self.experience_bank and self.async_thinking_scheduler:
+            try:
+                user_message = event.message_obj.message_str
+                session_id = event.get_session_id()
+                
+                # 记录用户交互到经历银行
+                # 注：此时还没有AI回复，会在之后的訪问中更新
+                self._record_interaction_async(session_id, user_message)
+                
+            except Exception as e:
+                logger.error(f"记录用户交互失败: {e}")
+        
         # 确保函数返回None
         return None
     
-    # ========== 生活模拟辅助方法 ==========
+    # ========== 经历累积辅助方法 ==========
+        
+    def _record_interaction_async(self, session_id: str, user_message: str) -> None:
+        """记录用户交互到经历银行"""
+        if not self.experience_bank:
+            return
+            
+        try:
+            # 记录对话
+            self.experience_bank.record_conversation(
+                user_id=session_id,
+                user_message=user_message,
+                bot_response="",  # 此时还没有AI回复
+                session_id=session_id
+            )
+                
+            # 从用户消息中提取技能、兴趣等，自动更新成長追蹤
+            self._extract_and_update_growth(user_message)
+                
+            # 检测并记录长期项目
+            self._detect_and_record_projects(user_message, session_id)
+                
+            # 检测并记录承诺
+            self._detect_and_record_promises(user_message, session_id)
+                
+            # 记录生物钟状态
+            self._record_circadian_state()
+            
+            # 执行关系网络智能压缩（每30次交互执行一次）
+            if self.experience_bank and abs(hash(session_id)) % 30 == 0:
+                self._analyze_relationship_network(session_id)
+                        
+            # 更新心理引擎（内在驱动力、情绪、价值观）
+            if self.psychology_engine:
+                # 记录互动（满足连接需求）
+                self.psychology_engine.record_interaction()
+                            
+                # 检测是否感到孤独或新增需求互动
+                connection_check = self.psychology_engine.check_connection_need()
+                if connection_check.get("feels_lonely"):
+                    logger.debug("[PSYCHOLOGY] 新增需求互动")
+                        
+            # 记忆管理（优先级权量、琐碎淘汰）
+            if self.memory_manager:
+                # 记录此次对话，自动计算重要性
+                context_clues = []
+                if "记得" in user_message or "求你" in user_message:
+                    context_clues.append("需要记录")
+                
+                self.memory_manager.record_weighted_conversation(
+                    user_id=session_id,
+                    user_message=user_message,
+                    bot_response="",  # 此时还没有回复
+                    context_clues=context_clues,
+                    session_id=session_id
+                )
+                
+                # 自动应用记忆衰减 (每30次交互执行一次)
+                if abs(hash(session_id)) % 30 == 0:
+                    logger.debug("[记忆管理] 执行记忆衰减")
+                    self.memory_manager.apply_memory_decay(days_threshold=30)
+            
+            # 时间线验证 - 验证经历的时间一致性
+            if self.timeline_verifier:
+                # 找到用户提及的时间信息
+                time_markers = ["上月", "上周", "去年", "是日", "昨天"]
+                mentioned_time = None
+                for marker in time_markers:
+                    if marker in user_message:
+                        mentioned_time = marker
+                        break
+                
+                # 如果检测到时间信息，验证更新时间线
+                if mentioned_time:
+                    self.timeline_verifier.add_experience(
+                        experience_id=f"{session_id}_{datetime.now().timestamp()}",
+                        content=user_message[:100],
+                        event_date=mentioned_time,
+                        event_type="conversation"
+                    )
+                
+            logger.debug(f"用户交互已记录: {session_id}")
+                
+        except Exception as e:
+            logger.debug(f"记录用户交互失败: {e}")
+        
+    def _extract_and_update_growth(self, message: str) -> None:
+        """从用户消息中提取兴趣、技能等，自动更新成長追蹤"""
+        if not self.experience_bank:
+            return
+            
+        try:
+            message_lower = message.lower()
+                    
+            # 检测技能
+            for skill in ["python", "java", "javascript", "c++", "latex"]:
+                if skill.lower() in message_lower:
+                    self.experience_bank.update_growth("skills", skill)
+                    
+            # 检测兴趣
+            for interest in ["编程", "旅游", "音乐", "电影", "游戏"]:
+                if interest in message:
+                    self.experience_bank.update_growth("interests", interest)
+                
+            # 检测观点
+            if "成长" in message or "加油" in message:
+                self.experience_bank.update_growth("views", "乐观向上")
+            if "伤心" in message or "难过" in message:
+                self.experience_bank.update_growth("views", "需要陪伴")
+            
+        except Exception as e:
+            logger.debug(f"提取成長信息失败: {e}")
+        
+    def _detect_and_record_projects(self, message: str, session_id: str) -> None:
+        """检测并记录长期项目进展"""
+        if not self.experience_bank:
+            return
+            
+        try:
+            # 检测上月、上周等的时间前缀
+            if "上月" in message or "上周" in message:
+                # 検测项目完成
+                if "学完" in message or "学了" in message or "学习" in message:
+                    project = self._extract_project_name(message)
+                    if project:
+                        self.experience_bank.record_project(
+                            project_name=project,
+                            description=f"用户提及：{message[:100]}",
+                            status="in_progress",
+                            metadata={"user_id": session_id}
+                        )
+                        logger.debug(f"项目已记录: {project}")
+            
+        except Exception as e:
+            logger.debug(f"検测项目失败: {e}")
+        
+    def _detect_and_record_promises(self, message: str, session_id: str) -> None:
+        """检测并记录承诺
+            
+        检测样式：
+        - "上次答应..." → 完成承诺
+        - "记得..." → 新建承诺
+        """
+        if not self.experience_bank:
+            return
+            
+        try:
+            # 检测承诺完成
+            completion_keywords = ["完成", "完成了", "做了", "已经", "成功"]
+            if any(kw in message for kw in completion_keywords):
+                # 提取承诺描述
+                promise_desc = self._extract_promise_description(message)
+                if promise_desc:
+                    self.experience_bank.complete_promise(
+                        promise_keyword=promise_desc[:30],
+                        completion_note=f"用户提及: {message[:80]}"
+                    )
+                    logger.debug(f"承诺已标记为完成: {promise_desc}")
+                
+            # 检测新承诺
+            if "记得" in message or "答应" in message or "承诺" in message:
+                promise_desc = self._extract_promise_description(message)
+                if promise_desc:
+                    self.experience_bank.record_promise(
+                        promise=promise_desc,
+                        related_user_id=session_id,
+                        metadata={"mentioned_in_message": message[:100]}
+                    )
+                    logger.debug(f"承诺已记录: {promise_desc}")
+            
+        except Exception as e:
+            logger.debug(f"検测承诺失败: {e}")
+        
+    def _extract_project_name(self, message: str) -> Optional[str]:
+        """从消息中提取项目名称"""
+        # 提取消息中第一个先前出现的中文词语或短语句
+        keywords = ["课程", "书籍", "作品", "项目"]
+        for kw in keywords:
+            if kw in message:
+                # 返回第一个100字以内的描述
+                idx = message.find(kw)
+                return message[max(0, idx-10):min(len(message), idx+30)].strip()
+        return None
+        
+    def _extract_promise_description(self, message: str) -> Optional[str]:
+        """从消息中提取承诺描述"""
+        # 简单的提取逻辑，一般是消息的前100个字
+        return message[:100].strip() if len(message) > 0 else None
+        
+    def _record_circadian_state(self) -> None:
+        """根据当前时间记录生物钟状态"""
+        if not self.experience_bank:
+            return
+            
+        try:
+            now = datetime.now()
+            hour = now.hour
+                
+            # 根据时刻判断当前时段
+            if 6 <= hour < 9:
+                state = "清晨"
+                energy = 6
+                creativity = 7
+            elif 9 <= hour < 12:
+                state = "上午"
+                energy = 8
+                creativity = 8
+            elif 12 <= hour < 14:
+                state = "中午"
+                energy = 5
+                creativity = 4
+            elif 14 <= hour < 18:
+                state = "下午"
+                energy = 7
+                creativity = 7
+            elif 18 <= hour < 21:
+                state = "晚晨"
+                energy = 6
+                creativity = 6
+            else:
+                state = "夜晨"
+                energy = 4
+                creativity = 5
+                
+            # 随机变化一些
+            energy += random.randint(-2, 2)
+            creativity += random.randint(-2, 2)
+            mood = random.choice(["开心", "中性", "沮丧"])
+                
+            self.experience_bank.record_circadian_state(state, energy, creativity, mood)
+                
+        except Exception as e:
+            logger.debug(f"记录生物钟失败: {e}")
+    
+    def _analyze_relationship_network(self, user_id: str) -> None:
+        """
+        执行关系网络的智能压缩
+        提取关系里程碑和生成个性化特征描述
+        """
+        if not self.experience_bank:
+            return
+        
+        try:
+            # 提取关系里程碑(最多10个)
+            milestones = self.experience_bank.extract_relationship_milestones(user_id, max_milestones=10)
+            
+            if milestones:
+                logger.debug(f"[关系网络] 提取事件: {len(milestones)}个")
+            
+            # 生成个性化关系特征描述
+            profile = self.experience_bank.generate_relationship_profile(user_id)
+            
+            if profile:
+                logger.debug(f"[关系网络] 特征: {profile.get('relationship_characteristics')}")
+        
+        except Exception as e:
+            logger.debug(f"[关系网络] 分析失败: {e}")
     
     def _get_provider_id(self) -> Optional[str]:
         """获取当前使用的 LLM 提供者 ID"""
@@ -422,9 +818,17 @@ class Main(Star):
         return None
     
     async def _maybe_generate_schedule(self, now: datetime) -> str:
-        """在需要时生成当天的日程（使用缓存优化）"""
+        """在需要时生成当天的日程（使用本地数据管理器优化）"""
         today_str = now.strftime("%Y-%m-%d")
-            
+        
+        # 首先尝试从本地数据管理器获取
+        cached_schedule = self.local_data_manager.get_schedule_data(today_str)
+        if cached_schedule:
+            logger.info(f"从本地数据获取 {today_str} 的日程信息")
+            # 更新缓存
+            self._schedule_cache = {"data": cached_schedule, "date": today_str}
+            return cached_schedule
+        
         # 检查缓存
         if self._schedule_cache["date"] == today_str and self._schedule_cache["data"]:
             logger.debug(f"使用缓存的日程: {today_str}")
@@ -500,11 +904,23 @@ class Main(Star):
             
         # 更新缓存
         self._schedule_cache = {"data": schedule_text, "date": today_str}
+        
+        # 保存到本地数据管理器
+        self.local_data_manager.save_schedule_data(today_str, schedule_text)
+        
         return schedule_text
     
     async def _maybe_fetch_news(self, now: datetime) -> str:
-        """在需要时获取角色关注的早间新闻（使用缓存优化）"""
+        """在需要时获取角色关注的早间新闻（使用本地数据管理器优化）"""
         today_str = now.strftime("%Y-%m-%d")
+        
+        # 首先尝试从本地数据管理器获取
+        cached_news = self.local_data_manager.get_news_data(today_str)
+        if cached_news:
+            logger.info(f"从本地数据获取 {today_str} 的新闻信息")
+            # 更新缓存
+            self._news_cache = {"data": cached_news, "date": today_str}
+            return cached_news
         
         # 检查缓存
         if self._news_cache["date"] == today_str and self._news_cache["data"]:
@@ -547,18 +963,35 @@ class Main(Star):
         
         # 更新缓存
         self._news_cache = {"data": news_text, "date": today_str}
+        
+        # 保存到本地数据管理器
+        if news_text:
+            self.local_data_manager.save_news_data(today_str, news_text)
+        
         return news_text
     
     async def _get_weather_desc(self) -> str:
-        """获取简单的本地天气描述（使用缓存优化）"""
+        """获取简单的本地天气描述（使用本地数据管理器优化）"""
+        now = datetime.now()
+        today_str = now.strftime("%Y-%m-%d")
+        
         if not self.weather_location:
             logger.debug("未配置天气位置，跳过天气查询")
             return ""
         
-        # 检查缓存（1小时内有效）
+        # 首先尝试从本地数据管理器获取
+        cached_weather = self.local_data_manager.get_weather_data(today_str)
+        if cached_weather:
+            logger.info(f"从本地数据获取 {today_str} 的天气信息")
+            # 更新内存缓存
+            current_time = time.time()
+            self._weather_cache = {"data": cached_weather, "timestamp": current_time}
+            return cached_weather
+        
+        # 检查内存缓存（1小时内有效）
         current_time = time.time()
         if self._weather_cache["data"] and (current_time - self._weather_cache["timestamp"]) < 3600:
-            logger.debug(f"使用缓存的天气数据: {self._weather_cache['data']}")
+            logger.debug(f"使用内存缓存的天气数据: {self._weather_cache['data']}")
             return self._weather_cache["data"]
         
         weather_text = ""
@@ -599,9 +1032,19 @@ class Main(Star):
                 except Exception as e:
                     logger.debug(f"使用天气工具获取天气失败: {e}")
         
-        # 更新缓存
+        # 更新缓存和本地数据
         if weather_text:
             self._weather_cache = {"data": weather_text, "timestamp": current_time}
+            # 保存到本地数据管理器
+            self.local_data_manager.save_weather_data(today_str, weather_text)
+            
+            # 更新异步思考调度器的天气信息
+            if self.enable_async_thinking and self.async_thinking_scheduler:
+                try:
+                    self.async_thinking_scheduler.set_weather(weather_text)
+                    logger.debug(f"天气信息已更新到调度器: {weather_text}")
+                except Exception as e:
+                    logger.debug(f"更新天气信息到调度器失败: {e}")
         
         return weather_text or ""
     
@@ -803,16 +1246,14 @@ class Main(Star):
         
         Args:
             prompt(string): 图片提示词，应包含主体、场景、风格等必要信息。例如："一个开心微笑的中国女孩，真实风格，明亮色彩"
-            size(string): 图片尺寸，默认为1080x1920。可选项：1920x1080（横屏）、1024x1024（方形）等
+            size(string): 图片尺寸，默认为1080x1920。可选项：1920x1024（横屏）、1024x1024（方形）等
         '''
         
         if not self.llm_tool_enabled:
-            yield "绘图工具已被禁用"
-            return
+            return "绘图工具已被禁用"
         
         if not self.api_key:
-            yield "API密钥未配置，无法生成图片"
-            return
+            return "API密钥未配置，无法生成图片"
         
         try:
             # 获取当前会话的情绪上下文
@@ -837,13 +1278,13 @@ class Main(Star):
             
             # 返回一个简洁的结果给LLM，告诉它图片已发送
             # 让LLM根据图片内容和上下文自然地继续对话
-            yield f"图片已生成并发送给用户，内容为：{prompt}。请根据图片内容自然地继续对话。"
+            return f"图片已生成并发送给用户，内容为：{prompt}。请根据图片内容自然地继续对话。"
         
         except Exception as e:
             error_msg = f"生成图片时遇到问题: {str(e)}"
             # 发送错误信息给用户
             await event.send(event.plain_result(error_msg))
-            yield f"图片生成失败：{str(e)}"
+            return f"图片生成失败：{str(e)}"
     
     # ========== 命令处理器 ==========
     

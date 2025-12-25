@@ -399,7 +399,7 @@ class Qzone:
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
             },
         )
-        print(data)
+        logger.debug(f"[QQ空间API] 评论回复数据: {data}")
         return succ, data
 
     async def delete(self, tid: str):
