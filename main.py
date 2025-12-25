@@ -544,16 +544,12 @@ class Main(Star):
             context_data: 上下文数据
         
         注意：
-            由于AstrBot插件系统主要是被动响应模式，主动发送消息需要访问平台适配器的API。
-            当前实现仅记录日志，实际发送需要：
-            1. 获取平台适配器实例
-            2. 调用平台特定的消息发送API
-            3. 处理异步发送和错误
+            通过 AstrBot 的 LLM 生成消息并调用平台适配器发送
         """
         try:
             # 从上下文数据中获取必要信息
             user_id = context_data.get("user_id")
-            platform = context_data.get("platform")
+            platform = context_data.get("platform", "unknown")
             
             if not user_id:
                 logger.warning(f"[主动消息] 缺少user_id，无法发送")
@@ -562,18 +558,29 @@ class Main(Star):
             logger.info(f"[主动消息] 触发 - 会话: {session_id}, 用户: {user_id}, 平台: {platform}")
             logger.info(f"[主动消息] 内容: {message}")
             
-            # TODO: 实现实际的消息发送
-            # 示例代码（需要根据实际平台调整）：
-            # if platform == "aiocqhttp":
-            #     adapter = self.context.get_platform_adapter("aiocqhttp")
-            #     if adapter:
-            #         await adapter.send_message(user_id=user_id, message=message)
-            
-            logger.warning("[主动消息] 实际发送功能尚未实现，需要平台API支持")
-            logger.info("[主动消息] 建议：")
-            logger.info("  1. 如果使用QQ平台，可以通过OneBot API主动发送")
-            logger.info("  2. 需要在插件中保存平台适配器实例")
-            logger.info("  3. 或者使用AstrBot的全局消息总线")
+            # 尝试通过平台适配器发送消息
+            try:
+                # 获取平台适配器
+                if platform == "aiocqhttp" or platform == "qq":
+                    # 对于 QQ/OneBot 平台，通过消息事件发送
+                    adapter = self.context.platform_adapter
+                    if adapter and hasattr(adapter, 'send_message'):
+                        # 发送消息到指定用户
+                        await adapter.send_message(
+                            target_id=user_id,
+                            message=message,
+                            message_type="private"  # 私聊
+                        )
+                        logger.info(f"[主动消息] 已发送到用户 {user_id}")
+                        return
+                
+                # 如果没有找到合适的适配器，尝试通过 LLM 上下文
+                logger.debug(f"[主动消息] 平台适配器不可用或不支持，尝试其他方式")
+                logger.warning(f"[主动消息] 未能成功发送，平台: {platform}")
+                
+            except Exception as e:
+                logger.debug(f"[主动消息] 通过适配器发送失败: {e}")
+                logger.warning(f"[主动消息] 消息已生成但未能发送: {message[:50]}...")
             
         except Exception as e:
             logger.error(f"[主动消息] 发送失败: {e}", exc_info=True)
@@ -834,7 +841,7 @@ class Main(Star):
         if self.enable_async_thinking and self.life_story_engine:
             try:
                 # 设置基础人设（仅首次）
-                current_persona = self._get_persona_profile()
+                current_persona = await self._get_persona_profile()
                 if current_persona:
                     self.life_story_engine.set_base_persona(current_persona)
                 
@@ -933,7 +940,7 @@ class Main(Star):
                         
                 # 记录用户交互到经历银行
                 # 注：此时还没有AI回复，会在之后的访问中更新
-                self._record_interaction_async(session_id, user_message)
+                await self._record_interaction_async(session_id, user_message)
                         
                 # 人格演化：每日例行检查
                 if self.personality_evolution:
@@ -976,7 +983,7 @@ class Main(Star):
         
     # ========== 经历累积辅助方法 ==========
         
-    def _record_interaction_async(self, session_id: str, user_message: str) -> None:
+    async def _record_interaction_async(self, session_id: str, user_message: str) -> None:
         """记录用户交互到经历银行"""
         if not self.experience_bank:
             return
@@ -1002,7 +1009,7 @@ class Main(Star):
                 self.proactive_manager.clear_scheduled_messages(session_id)
                     
                 # 调度一条新的主动消息（在空闲延迟后发送）
-                proactive_msg = self._generate_proactive_greeting()
+                proactive_msg = await self._generate_proactive_greeting(session_id)
                 
                 # 获取用户信息用于后续发送
                 user_id = session_id
@@ -1309,21 +1316,103 @@ class Main(Star):
         except Exception as e:
             logger.error(f"[主动消息] 发送失败: {e}", exc_info=True)
     
-    def _generate_proactive_greeting(self) -> str:
-        """生成主动问候消息
+    async def _generate_proactive_greeting(self, session_id: str = "") -> str:
+        """生成主动问候消息，基于历史对话上下文让LLM生成个性化内容
+        
+        Args:
+            session_id: 会话ID，用于获取历史对话上下文
         
         Returns:
             问候消息字符串
         """
-        greetings = [
-            "在吗？最近怎么样？😊",
-            "很久没聊天了，忙吗？",
-            "很久不见，有空聊聊吗？",
-            "喜，在忙什么呢？",
-            "最近过得好吗？😌",
-            "有空聊聊天吗？好久不见了！",
-        ]
-        return random.choice(greetings)
+        try:
+            # 如果有会话ID，尝试获取历史对话上下文
+            context_info = ""
+            if session_id:
+                # 尝试获取最近的对话历史
+                try:
+                    # 获取最近的对话历史（使用AstrBot的对话管理功能）
+                    conversation_history = await self._get_recent_conversation_context(session_id)
+                    if conversation_history:
+                        context_info = f"\n[最近对话回顾：{' '.join(conversation_history[:3])}]"  # 只取前3条
+                except Exception as e:
+                    logger.debug(f"获取对话历史失败: {e}")
+            
+            # 构建生成问候的提示词
+            persona_profile = await self._get_persona_profile()
+            greeting_prompt = (
+                f"你是{self.persona_name}，{persona_profile}。\n"
+                f"现在是{datetime.now().strftime('%Y年%m月%d日 %H:%M')}。\n"
+                f"你注意到用户很久没来聊天了，想主动联系一下。{context_info}\n\n"
+                "请生成一条自然、亲切、符合你人设的主动问候消息，不要超过15个字。\n"
+                "要求：\n"
+                "1. 语气自然，像真人一样聊天\n"
+                "2. 可以提及之前的对话内容（如果有）\n"
+                "3. 表达关心或好奇，邀请用户聊天\n"
+                "4. 不要使用过于正式的语言\n"
+                "5. 不要提及你是AI或机器人\n\n"
+                "消息内容："
+            )
+            
+            # 尝试通过LLM生成个性化问候
+            provider_id = self._get_provider_id()
+            if provider_id and self.context and hasattr(self.context, 'llm_generate'):
+                try:
+                    resp = await self.context.llm_generate(
+                        chat_provider_id=provider_id,
+                        prompt=greeting_prompt,
+                    )
+                    generated_greeting = (resp.completion_text or "").strip()
+                    if generated_greeting:
+                        logger.info(f"[主动消息] LLM生成问候: {generated_greeting}")
+                        return generated_greeting
+                except Exception as e:
+                    logger.debug(f"LLM生成问候失败: {e}")
+            
+            # 回退到预设问候
+            greetings = [
+                "在吗？最近怎么样？😊",
+                "很久没聊天了，忙吗？",
+                "很久不见，有空聊聊吗？",
+                f"喜，在忙什么呢？",
+                "最近过得好吗？😌",
+                "有空聊聊天吗？好久不见了！",
+            ]
+            return random.choice(greetings)
+        except Exception as e:
+            logger.error(f"生成主动问候失败: {e}")
+            # 发生错误时返回随机问候
+            greetings = [
+                "在吗？最近怎么样？😊",
+                "很久没聊天了，忙吗？",
+                "很久不见，有空聊聊吗？",
+                f"喜，在忙什么呢？",
+                "最近过得好吗？😌",
+                "有空聊聊天吗？好久不见了！",
+            ]
+            return random.choice(greetings)
+    
+    async def _get_recent_conversation_context(self, session_id: str) -> list:
+        """获取最近的对话上下文"""
+        # 这里可以接入AstrBot的对话历史管理功能
+        # 暂时返回空列表，实际实现需要根据AstrBot的对话历史API
+        try:
+            if self.experience_bank:
+                # 从经历银行获取最近的对话记录
+                recent_conversations = self.experience_bank.get_recent_conversations(
+                    session_id, limit=5
+                )
+                if recent_conversations:
+                    # 提取用户消息内容
+                    user_messages = []
+                    for conv in recent_conversations:
+                        if 'user_message' in conv and conv['user_message']:
+                            user_messages.append(conv['user_message'])
+                    return user_messages
+        except Exception as e:
+            logger.debug(f"获取对话历史上下文失败: {e}")
+        return []
+
     
     def _get_provider_id(self) -> Optional[str]:
         """获取当前使用的 LLM 提供者 ID"""

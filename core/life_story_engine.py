@@ -260,17 +260,27 @@ class LifeStoryEngine:
             logger.error(f"[人生故事引擎] 收集经历失败: {e}", exc_info=True)
             return data
     
-    async def update_life_story(self, llm_provider) -> bool:
+    async def update_life_story(self, llm_action) -> bool:
         """更新人生故事（补充经历线）
         
         Args:
-            llm_provider: LLM提供者实例
+            llm_action: LLMAction 实例，用于获取实际的LLM提供者
             
         Returns:
             是否更新成功
         """
         try:
             logger.info("[人生故事引擎] 开始更新人生经历线...")
+            
+            # 从LLMAction获取实际的LLM提供者
+            if hasattr(llm_action, 'context'):
+                provider = llm_action.context.get_using_provider()
+                if not provider:
+                    logger.error("[人生故事引擎] 无法获取LLM提供者")
+                    return False
+            else:
+                logger.error("[人生故事引擎] LLMAction对象无效")
+                return False
             
             # 收集最近的经历
             recent_data = await self.collect_recent_experiences()
@@ -279,7 +289,7 @@ class LifeStoryEngine:
             prompt = self._build_story_update_prompt(recent_data)
             
             # 调用LLM生成新的经历章节
-            response = await llm_provider.text_chat(
+            response = await provider.text_chat(
                 prompt=prompt,
                 system_prompt=self._get_story_system_prompt()
             )
@@ -297,7 +307,7 @@ class LifeStoryEngine:
                 self._save_state()
                 
                 # 重新生成上下文缓存
-                await self._regenerate_context_cache(llm_provider)
+                await self._regenerate_context_cache(llm_action)
                 
                 logger.info(f"[人生故事引擎] 人生经历线已更新到第 {self.state['current_chapter']} 章")
                 return True
@@ -400,15 +410,25 @@ class LifeStoryEngine:
         except Exception as e:
             logger.error(f"[人生故事引擎] 整合故事更新失败: {e}")
     
-    async def _regenerate_context_cache(self, llm_provider):
+    async def _regenerate_context_cache(self, llm_action):
         """重新生成上下文缓存（最精简版本）"""
         try:
             logger.info("[人生故事引擎] 正在生成精简上下文...")
             
+            # 从LLMAction获取实际的LLM提供者
+            if hasattr(llm_action, 'context'):
+                provider = llm_action.context.get_using_provider()
+                if not provider:
+                    logger.error("[人生故事引擎] 无法获取LLM提供者用于生成上下文缓存")
+                    return
+            else:
+                logger.error("[人生故事引擎] LLMAction对象无效")
+                return
+            
             # 构建精简提示词
             prompt = self._build_compact_context_prompt()
             
-            response = await llm_provider.text_chat(
+            response = await provider.text_chat(
                 prompt=prompt,
                 system_prompt="你是一个文本压缩专家，擅长用最少的字数表达最多的信息。请将提供的人生故事压缩为精简的上下文提示。"
             )
