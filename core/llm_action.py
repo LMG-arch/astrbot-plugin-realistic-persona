@@ -1,6 +1,7 @@
 import random
 import re
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import aiohttp
@@ -12,6 +13,7 @@ from astrbot.api import logger
 from astrbot.core.config.astrbot_config import AstrBotConfig
 from astrbot.core.provider.provider import Provider
 from astrbot.core.star.context import Context
+from astrbot.core.star.star_tools import StarTools
 
 from .post import Post
 
@@ -36,7 +38,7 @@ class LLMAction:
         self.weather_location: str = self.config.get("weather_location", "")
 
     async def _request_modelscope(self, prompt: str, size: str | None = None) -> str:
-        """调用 ModelScope 文生图，返回图片 URL"""
+        """调用 ModelScope 文生图，下载并保存到本地，返回本地路径"""
         if not self.ms_api_key:
             raise ValueError("未配置 ms_api_key，无法使用 ModelScope 生图")
         size = size or self.ms_size
@@ -58,9 +60,10 @@ class LLMAction:
                 resp.raise_for_status()
                 data = await resp.json()
         # 简单兼容同步/异步两种返回格式
+        image_url = None
         if "output_images" in data and data["output_images"]:
-            return data["output_images"][0]
-        if "task_id" in data:
+            image_url = data["output_images"][0]
+        elif "task_id" in data:
             task_id = data["task_id"]
             delay = 1
             while True:
@@ -78,13 +81,41 @@ class LLMAction:
                 if tdata.get("task_status") == "SUCCEED":
                     imgs = tdata.get("output_images", [])
                     if imgs:
-                        return imgs[0]
+                        image_url = imgs[0]
                     break
                 if tdata.get("task_status") == "FAILED":
                     break
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 10)
-        raise ValueError("ModelScope 未返回图片 URL")
+        
+        if not image_url:
+            raise ValueError("ModelScope 未返回图片 URL")
+        
+        # 下载图片到本地
+        local_path = await self._download_image(image_url)
+        logger.info(f"ModelScope生成的图片已保存到: {local_path}")
+        return local_path
+    
+    async def _download_image(self, url: str) -> str:
+        """下载图片到本地，返回本地路径"""
+        # 创建images目录
+        images_dir = StarTools.get_data_dir("astrbot_plugin_realistic_persona") / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 生成文件名（使用时间戳）
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"generated_{timestamp}.png"
+        local_path = images_dir / filename
+        
+        # 下载图片
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                resp.raise_for_status()
+                content = await resp.read()
+                with open(local_path, 'wb') as f:
+                    f.write(content)
+        
+        return str(local_path)
 
     async def _get_weather_desc(self) -> str:
         """获取简单天气描述（用于写日记和画图提示词）"""
@@ -209,7 +240,7 @@ class LLMAction:
             "- 可以包含 Emoji 表情增加生动性\n"
             "- 只写 2-3 句话，简洁明了\n"
             "- 不要长篇大论，不要流水账式的叙述\n"
-            "- 可以是分享心情、小感慨、有趣的事、即时感受等\n"
+            "- 可以是分享心情、小感慨、有趣的事、即时感受、思考、或者emo等\n"
             "\n示例：\n"
             "- “今天天气超好，在公园晒了一下午的太阳🌞”\n"
             "- “终于学会了那道难题，感觉自己还是挺聪明的呀😏”\n"
