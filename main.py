@@ -783,7 +783,7 @@ class Main(Star):
         if self.enable_async_thinking and self.life_story_engine:
             try:
                 # 设置基础人设（仅首次）
-                current_persona = self._get_persona()
+                current_persona = self._get_persona_profile()
                 if current_persona:
                     self.life_story_engine.set_base_persona(current_persona)
                 
