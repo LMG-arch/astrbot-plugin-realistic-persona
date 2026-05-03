@@ -519,6 +519,13 @@ pip install -r requirements.txt
   - **优化QQ空间功能错误提示**：区分配置未启用和依赖未安装两种错误，给出更明确的提示信息
   - **增强异步思考上下文关联**：思考引擎生成内心独白时会结合当前日程、天气、新闻、最近对话和经历，不再随机生成泛泛内容
   - **补充缺失的依赖声明**：`requirements.txt`添加`aiocqhttp`、`beautifulsoup4`、`json5`、`lxml`，解决QQ空间模块加载失败问题
+  - **符合AstrBot插件开发文档接口规范**：
+    - 添加`@register`装饰器，包含插件名称、作者、描述、版本、仓库地址
+    - `__init__`参数类型修正为`AstrBotConfig`，使用公共API `from astrbot.api import AstrBotConfig`
+    - LLM钩子函数添加类型注解：`ProviderRequest`和`LLMResponse`（`from astrbot.api.provider`）
+    - `MessageChain`改为从公共API导入：`from astrbot.api.event import MessageChain`
+    - `get_astrbot_data_path()`替换为公共API `StarTools.get_data_dir()`
+    - 移除未使用的导入（`cast`、`Path`）和不规范的内部模块引用
 
 
 

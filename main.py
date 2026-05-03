@@ -15,15 +15,14 @@ import random
 import re
 import time
 from datetime import datetime
-from pathlib import Path
-from typing import cast
 
 import aiohttp
 
-from astrbot.api import logger
+from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.message_components import BaseMessageComponent, Image, Plain
-from astrbot.api.star import Context, Star, StarTools
+from astrbot.api.provider import LLMResponse, ProviderRequest
+from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core.config.default import VERSION
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
@@ -31,7 +30,6 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_platform_adapter import (
     AiocqhttpAdapter,
 )
-from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 from astrbot.core.utils.version_comparator import VersionComparator
 
 
@@ -98,6 +96,13 @@ except ImportError as e:
     logger.warning(f"QQ空间模块未完全加载: {e}")
 
 
+@register(
+    "astrbot_plugin_realistic_persona",
+    "LMG-arch",
+    "拟人化角色行为系统：情绪感知、生活模拟、QQ空间日记、AI配图、异步思考、人格演化、人生故事引擎等",
+    "1.12.0",
+    "https://github.com/LMG-arch/astrbot-plugin-realistic-persona.git",
+)
 class Main(Star):
     """拟人化角色行为系统主类
 
@@ -108,32 +113,24 @@ class Main(Star):
     - QQ空间日记：自动生成并发布说说
     - 异步思考系统：后台持续思考和经历累积
     - 人格演化系统：表达风格和习惯的渐进式演化
-
-    属性:
-        context (Context): 插件上下文
-        config (dict): 插件配置
-        enable_emotion_detection (bool): 是否启用情绪检测
-        enable_life_simulation (bool): 是否启用生活模拟
-        enable_qzone (bool): 是否启用QQ空间功能
-        enable_async_thinking (bool): 是否启用异步思考
     """
 
     # 数据库版本
     DB_VERSION = 4
 
-    def __init__(self, context: Context, config: dict | None = None):
+    def __init__(self, context: Context, config: AstrBotConfig | None = None):
         """初始化插件
 
         Args:
             context: 插件上下文，提供对AstrBot核心服务的访问
-            config: 插件配置字典
+            config: 插件配置字典 (AstrBotConfig)
         """
         super().__init__(context)
         self.context = context
-        # 获取配置，优先使用传入的config，否则从context获取
+        # 获取配置，优先使用传入的config，否则使用空dict
         if config is None:
             config = {}
-        self.config = cast(dict, config)
+        self.config = config
 
         # 存储当前请求的event（用于工具调用解析）
         self._current_event = None
@@ -373,13 +370,12 @@ class Main(Star):
         """初始化QQ空间相关设置"""
         # pillowmd样式目录
         default_style_dir = (
-            Path(get_astrbot_data_path())
-            / "plugins/astrbot_plugin_realistic_persona/default_style"
+            StarTools.get_data_dir("astrbot_plugin_realistic_persona") / "default_style"
         )
         self.pillowmd_style_dir = config.get("pillowmd_style_dir") or default_style_dir
 
         # 缓存目录
-        self.cache: Path = (
+        self.cache = (
             StarTools.get_data_dir("astrbot_plugin_realistic_persona") / "cache"
         )
         self.cache.mkdir(parents=True, exist_ok=True)
@@ -841,15 +837,14 @@ class Main(Star):
 
     @filter.on_llm_request()
     async def on_llm_request_handler(
-        self, event: AstrMessageEvent, request, *args, **kwargs
+        self, event: AstrMessageEvent, request: ProviderRequest
     ):
-        """存储请求事件，供响应后使用"""
-        # 保存event到实例变量，供后续使用
+        """LLM请求前钩子：存储事件并注入情绪/生活模拟上下文"""
         self._current_event = event
-        return await self._on_llm_request_handler(event, request, *args, **kwargs)
+        return await self._on_llm_request_handler(event, request)
 
     async def _on_llm_request_handler(
-        self, event: AstrMessageEvent, request, *args, **kwargs
+        self, event: AstrMessageEvent, request: ProviderRequest
     ):
         """LLM 请求前处理：注入情绪信息与"生活模拟"上下文"""
         analysis: dict | None = None
@@ -1434,8 +1429,7 @@ class Main(Star):
             logger.info(f"[主动消息] 内容: {message}")
 
             # 通过 AstrBot Context.send_message 发送消息
-            from astrbot.api.message_components import Plain
-            from astrbot.core.message.message_event_result import MessageChain
+            from astrbot.api.event import MessageChain
 
             chain = MessageChain([Plain(message)])
             try:
@@ -2907,20 +2901,11 @@ class Main(Star):
             return None
 
     @filter.on_llm_response()
-    async def on_llm_response_handler(
-        self, event: AstrMessageEvent, response_text, *args, **kwargs
-    ):
+    async def on_llm_response_handler(self, event: AstrMessageEvent, resp: LLMResponse):
         """拦截LLM响应，检测并执行工具调用，以及检测未调用的图像生成内容"""
-        # 提取文本内容（response_text 可能是 LLMResponse 对象）
-        if hasattr(response_text, "completion_text"):
-            text = response_text.completion_text
-        elif isinstance(response_text, str):
-            text = response_text
-        else:
-            text = str(response_text)
-
+        text = resp.completion_text or ""
         if not text:
-            return response_text
+            return resp
 
         # 检测是否包含工具调用
         tool_call = self.parse_tool_call(text)
@@ -2944,9 +2929,9 @@ class Main(Star):
         image_gen_detected = await self._detect_and_handle_image_generation(text, event)
         if image_gen_detected:
             # 如果检测到图像生成并已处理，则返回原始文本
-            return response_text
+            return resp
 
-        return response_text
+        return resp
 
     async def _detect_and_handle_image_generation(
         self, text: str, event: AstrMessageEvent
