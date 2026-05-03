@@ -158,6 +158,74 @@ class ExperienceBank:
         except Exception as e:
             logger.error(f"[经历银行] 记录事件失败: {e}")
 
+    def get_recent_conversations(
+        self, session_id: str | None = None, limit: int = 5
+    ) -> list[dict]:
+        """获取最近的对话记录
+
+        Args:
+            session_id: 会话ID，为 None 时不限制会话
+            limit: 返回的最大记录数
+
+        Returns:
+            对话记录列表（时间倒序）
+        """
+        try:
+            if not self.conversations_file.exists():
+                return []
+            lines = []
+            with open(self.conversations_file, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                        if session_id and record.get("session_id") != session_id:
+                            continue
+                        lines.append(record)
+                    except json.JSONDecodeError:
+                        continue
+            # Return most recent first
+            return lines[-limit:][::-1]
+        except Exception as e:
+            logger.error(f"[经历银行] 获取最近对话失败: {e}")
+            return []
+
+    def get_recent_events(
+        self, event_type: str | None = None, limit: int = 5
+    ) -> list[dict]:
+        """获取最近的事件记录
+
+        Args:
+            event_type: 事件类型，为 None 时不限制类型
+            limit: 返回的最大记录数
+
+        Returns:
+            事件记录列表（时间倒序）
+        """
+        try:
+            if not self.events_file.exists():
+                return []
+            lines = []
+            with open(self.events_file, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                        if event_type and record.get("event_type") != event_type:
+                            continue
+                        lines.append(record)
+                    except json.JSONDecodeError:
+                        continue
+            # Return most recent first
+            return lines[-limit:][::-1]
+        except Exception as e:
+            logger.error(f"[经历银行] 获取最近事件失败: {e}")
+            return []
+
     def update_growth(
         self,
         growth_type: str,

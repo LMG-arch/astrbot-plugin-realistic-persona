@@ -304,7 +304,11 @@ class Main(Star):
             self.memory_manager = MemoryManager(mem_dir)
             self.timeline_verifier = TimelineVerifier(timeline_dir)
             self.async_thinking_scheduler = AsyncThinkingScheduler(
-                self.thought_engine, self.experience_bank
+                self.thought_engine,
+                self.experience_bank,
+                llm_action=None,
+                persona_profile="",
+                context_provider=self._get_thinking_context,
             )
 
             # 初始化人格演化系统
@@ -1487,7 +1491,7 @@ class Main(Star):
             # 3. 天气信息
             try:
                 if hasattr(self, "_weather_cache") and self._weather_cache:
-                    weather_info = self._weather_cache.get("weather")
+                    weather_info = self._weather_cache.get("data")
                     if weather_info:
                         context_parts.append(f"[当前天气：{weather_info}]")
             except Exception as e:
@@ -1496,7 +1500,7 @@ class Main(Star):
             # 4. 新闻信息
             try:
                 if hasattr(self, "_news_cache") and self._news_cache:
-                    news_info = self._news_cache.get("news")
+                    news_info = self._news_cache.get("data")
                     if news_info:
                         context_parts.append(f"[今日新闻：{news_info[:150]}]")
             except Exception as e:
@@ -1908,6 +1912,74 @@ class Main(Star):
                     logger.debug(f"更新天气信息到调度器失败: {e}")
 
         return weather_text or ""
+
+    async def _get_thinking_context(self) -> dict:
+        """为异步思考提供上下文信息（天气、日程、新闻、最近对话和经历）
+
+        Returns:
+            dict with keys: weather, schedule, news, recent_conversations, recent_experiences
+        """
+        ctx: dict = {}
+        now = datetime.now()
+
+        # 1. Weather
+        try:
+            if hasattr(self, "_weather_cache") and self._weather_cache.get("data"):
+                ctx["weather"] = self._weather_cache["data"]
+            else:
+                weather = await self._get_weather_desc()
+                if weather:
+                    ctx["weather"] = weather
+        except Exception as e:
+            logger.debug(f"[思考上下文] 获取天气失败: {e}")
+
+        # 2. Schedule
+        try:
+            schedule = await self._maybe_generate_schedule(now)
+            if schedule:
+                ctx["schedule"] = schedule
+        except Exception as e:
+            logger.debug(f"[思考上下文] 获取日程失败: {e}")
+
+        # 3. News
+        try:
+            if hasattr(self, "_news_cache") and self._news_cache.get("data"):
+                ctx["news"] = self._news_cache["data"]
+        except Exception as e:
+            logger.debug(f"[思考上下文] 获取新闻失败: {e}")
+
+        # 4. Recent conversations
+        try:
+            if self.experience_bank:
+                convs = self.experience_bank.get_recent_conversations(limit=5)
+                if convs:
+                    conv_summaries = []
+                    for c in convs:
+                        user_msg = c.get("user_message", "")
+                        bot_msg = c.get("bot_response", "")
+                        if user_msg or bot_msg:
+                            conv_summaries.append(f"用户:{user_msg} 机器人:{bot_msg}")
+                    if conv_summaries:
+                        ctx["recent_conversations"] = "；".join(conv_summaries[:5])
+        except Exception as e:
+            logger.debug(f"[思考上下文] 获取最近对话失败: {e}")
+
+        # 5. Recent experiences/events
+        try:
+            if self.experience_bank:
+                events = self.experience_bank.get_recent_events(limit=5)
+                if events:
+                    event_summaries = [
+                        f"[{e.get('event_type', '')}] {e.get('description', '')}"
+                        for e in events
+                        if e.get("description")
+                    ]
+                    if event_summaries:
+                        ctx["recent_experiences"] = "；".join(event_summaries[:5])
+        except Exception as e:
+            logger.debug(f"[思考上下文] 获取最近经历失败: {e}")
+
+        return ctx
 
     def _get_current_activity(self, now: datetime) -> str:
         """根据时间段粗略推断当前生活活动"""

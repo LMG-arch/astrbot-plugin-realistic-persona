@@ -500,6 +500,7 @@ pip install -r requirements.txt
   - **修复api_url默认值不一致**：统一为`https://api-inference.modelscope.cn/`，与配置文件schema和ModelScope官方文档一致
   - **修复版本标识过时**：更新main.py头部版本注释为v1.12.0
   - **优化QQ空间功能错误提示**：区分配置未启用和依赖未安装两种错误，给出更明确的提示信息
+  - **增强异步思考上下文关联**：思考引擎生成内心独白时会结合当前日程、天气、新闻、最近对话和经历，不再随机生成泛泛内容
 
 
 
