@@ -131,7 +131,7 @@
   },
   "proactive_target_sessions": {
     "description": "主动消息目标会话白名单",
-    "type": "str",
+    "type": "string",
     "default": "",
     "condition": {"enable_proactive_messages": true},
     "hint": "指定接收主动消息的会话ID（格式：platform_id:message_type:session_id），多个用逗号分隔。留空则对所有会话生效"
