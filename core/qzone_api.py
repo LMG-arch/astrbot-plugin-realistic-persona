@@ -130,6 +130,29 @@ class Qzone:
             timeout=aiohttp.ClientTimeout(total=timeout),
         ) as resp:
             # 状态码处理
+            if resp.status in [500, 502, 503]:
+                # QQ服务器内部错误，重试
+                if retry_count < 2:
+                    import asyncio
+
+                    wait = 3 * (retry_count + 1)
+                    logger.warning(
+                        f"[QQ空间] 服务器错误({resp.status})，{wait}秒后重试 ({retry_count + 1}/3)..."
+                    )
+                    await asyncio.sleep(wait)
+                    return await self._request(
+                        method,
+                        url,
+                        params=params,
+                        data=data,
+                        headers=headers or self.ctx.headers(),
+                        timeout=timeout,
+                        retry_count=retry_count + 1,
+                        debug=debug,
+                    )
+                raise RuntimeError(
+                    f"请求失败，状态码: {resp.status}（重试{retry_count}次后仍失败）"
+                )
             if resp.status not in [200, 401, 403]:
                 raise RuntimeError(f"请求失败，状态码: {resp.status}")
 

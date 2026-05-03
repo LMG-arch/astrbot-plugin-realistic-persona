@@ -2,7 +2,7 @@
 拟人化角色行为系统插件 (Realistic Persona Plugin)
 整合了情绪感知、生活模拟、QQ空间日记、AI配图等功能
 
-版本: v1.19.0
+版本: v1.19.1
 作者: LMG-arch
 最后更新: 2026-05-04
 符合AstrBot插件开发完全指南规范
@@ -103,11 +103,13 @@ class ThinkingLLM:
     Args:
         context: AstrBot插件上下文
         provider_id: 指定的LLM提供商ID，留空则使用默认提供商
+        persona_profile: 角色人设描述，注入system prompt让思考更贴合角色
     """
 
-    def __init__(self, context, provider_id: str = ""):
+    def __init__(self, context, provider_id: str = "", persona_profile: str = ""):
         self.context = context
         self.provider_id = provider_id
+        self.persona_profile = persona_profile
 
     def _get_provider(self):
         """获取LLM提供商实例"""
@@ -118,6 +120,36 @@ class ThinkingLLM:
             provider = self.context.get_using_provider()
         return provider
 
+    def _build_system_prompt(self, mode: str = "thought") -> str:
+        """构建带人设的system prompt
+
+        Args:
+            mode: "thought" 表示内心独白, "activity" 表示日常活动
+        """
+        persona = self.persona_profile.strip()
+        persona_clause = f"你就是这个人：{persona}\n" if persona else ""
+        if mode == "thought":
+            return (
+                f"{persona_clause}"
+                "请完全以角色的身份进行内心独白。要求：\n"
+                "1. 真实自然，像真人内心独白，有具体的情绪和感受\n"
+                "2. 长度15-50字\n"
+                "3. 必须结合给定的真实情境（日程、天气、最近聊天、经历）来思考\n"
+                "4. 不要泛泛的感叹（如'又度过充实的一天'），要对具体事情有感受\n"
+                "5. 符合你的人设特点，有个人情感色彩\n"
+                "6. 直接返回思考内容，不要添加解释或引号"
+            )
+        else:
+            return (
+                f"{persona_clause}"
+                "请完全以角色的身份描述此刻正在做的一件日常小事。要求：\n"
+                "1. 真实自然，贴近生活，有具体动作和细节\n"
+                "2. 长度10-30字\n"
+                "3. 结合给定的日程、天气、时间段来描述\n"
+                "4. 不要重复之前做过的事\n"
+                "5. 直接返回活动内容，不要添加解释或引号"
+            )
+
     async def generate_thought(self, prompt: str) -> str | None:
         """让大模型根据提示生成一段思考或内心独白"""
         provider = self._get_provider()
@@ -126,10 +158,13 @@ class ThinkingLLM:
             return None
         try:
             resp = await provider.text_chat(
-                system_prompt="你是一个善于思考的人。根据给定的情境，生成一段自然、真实的内心独白。要求：1.真实自然，像真人内心独白；2.长度15-50字；3.结合情境特点；4.直接返回思考内容，不要添加解释。",
+                system_prompt=self._build_system_prompt("thought"),
                 prompt=prompt,
             )
             text = (resp.completion_text or "").strip()
+            if not text:
+                logger.warning("[思考LLM] LLM返回空内容")
+                return None
             # 清理：取第一行，去引号
             text = text.split("\n")[0].strip()
             if text.startswith('"') and text.endswith('"'):
@@ -149,10 +184,13 @@ class ThinkingLLM:
             return None
         try:
             resp = await provider.text_chat(
-                system_prompt="你是一个正在度过日常生活的人。根据给定的情境，描述你此刻正在做的一件日常小事。要求：1.真实自然，贴近生活；2.长度10-30字；3.具体且有画面感；4.直接返回活动内容，不要添加解释。",
+                system_prompt=self._build_system_prompt("activity"),
                 prompt=prompt,
             )
             text = (resp.completion_text or "").strip()
+            if not text:
+                logger.warning("[思考LLM] LLM返回空内容")
+                return None
             text = text.split("\n")[0].strip()
             if text.startswith('"') and text.endswith('"'):
                 text = text[1:-1]
@@ -166,7 +204,7 @@ class ThinkingLLM:
     "astrbot_plugin_realistic_persona",
     "LMG-arch",
     "拟人化角色行为系统：情绪感知、生活模拟、QQ空间日记、AI配图、异步思考、人格演化、人生故事引擎等",
-    "1.18.2",
+    "1.19.1",
     "https://github.com/LMG-arch/astrbot-plugin-realistic-persona.git",
 )
 class Main(Star):
@@ -380,7 +418,9 @@ class Main(Star):
             self.memory_manager = MemoryManager(mem_dir)
             self.timeline_verifier = TimelineVerifier(timeline_dir)
             # 创建轻量级思考LLM助手（不依赖QQ平台，可独立使用）
-            self._thinking_llm = ThinkingLLM(self.context, self.async_think_provider_id)
+            self._thinking_llm = ThinkingLLM(
+                self.context, self.async_think_provider_id, self.persona_profile
+            )
             self.async_thinking_scheduler = AsyncThinkingScheduler(
                 self.thought_engine,
                 self.experience_bank,

@@ -155,6 +155,61 @@ class ThoughtEngine:
 
         return "；".join(relevant[:3]) if relevant else ""
 
+    def _build_context_fallback(
+        self,
+        hour: int,
+        weather: str | None,
+        schedule: str | None,
+        news: str | None,
+        recent_conversations: str | None,
+        recent_experiences: str | None,
+    ) -> str | None:
+        """当LLM不可用时，用上下文数据拼接一个有意义的思考（比静态模板更好）
+
+        Returns:
+            拼接的思考内容，或 None（上下文不足时）
+        """
+        parts = []
+
+        # 优先用最近聊天/经历，这些最有信息量
+        if recent_experiences:
+            # 取最近一条经历
+            first = recent_experiences.split("；")[0][:30]
+            if first:
+                parts.append(f"刚才{first}，")
+
+        if recent_conversations:
+            # 取最近对话的关键词
+            first = recent_conversations.split("；")[0][:30]
+            if first:
+                parts.append(f"想起之前聊天说到的{first[:20]}，")
+
+        # 用日程添加具体感
+        if schedule:
+            schedule_excerpt = self._extract_relevant_schedule(schedule, hour)
+            if schedule_excerpt:
+                # 取日程中的第一个关键词
+                parts.append(f"今天{schedule_excerpt[:20]}，")
+
+        # 天气补充
+        if weather and len(parts) > 0:
+            if "雨" in weather:
+                parts.append("窗外的雨声让人心静")
+            elif "晴" in weather:
+                parts.append("外面阳光不错")
+            elif "雪" in weather:
+                parts.append("下雪了呢")
+
+        # 拼接
+        if parts:
+            result = "".join(parts)
+            # 确保长度合理（15-60字）
+            if len(result) > 60:
+                result = result[:57] + "..."
+            return result
+
+        return None
+
     async def generate_thought(
         self,
         llm_action,
@@ -258,7 +313,17 @@ class ThoughtEngine:
                     logger.warning("[思考引擎] LLM未能生成思考，使用备用方案")
 
             # 如果LLM不可用或生成失败，使用备用方案
-            logger.debug("[思考引擎] 使用备用思考生成方案")
+            # 优先尝试用上下文数据拼接一个有意义的思考
+            context_thought = self._build_context_fallback(
+                hour, weather, schedule, news, recent_conversations, recent_experiences
+            )
+            if context_thought:
+                self._save_thought(context_thought, current_time)
+                logger.info(f"[思考引擎] 使用上下文备用思考: {context_thought}")
+                return context_thought
+
+            # 上下文不足时使用静态模板
+            logger.debug("[思考引擎] 上下文不足，使用静态模板")
 
             # 根据时间段选择思考主题
             if 6 <= hour < 12:
