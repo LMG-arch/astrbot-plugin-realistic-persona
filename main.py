@@ -2,7 +2,7 @@
 拟人化角色行为系统插件 (Realistic Persona Plugin)
 整合了情绪感知、生活模拟、QQ空间日记、AI配图等功能
 
-版本: v1.18.0
+版本: v1.18.2
 作者: LMG-arch
 最后更新: 2026-05-03
 符合AstrBot插件开发完全指南规范
@@ -166,7 +166,7 @@ class ThinkingLLM:
     "astrbot_plugin_realistic_persona",
     "LMG-arch",
     "拟人化角色行为系统：情绪感知、生活模拟、QQ空间日记、AI配图、异步思考、人格演化、人生故事引擎等",
-    "1.18.0",
+    "1.18.2",
     "https://github.com/LMG-arch/astrbot-plugin-realistic-persona.git",
 )
 class Main(Star):
@@ -886,32 +886,8 @@ class Main(Star):
                             f"触发自拍，情绪: {emotion.value}, 提示词: {result['selfie_prompt']}"
                         )
 
-                # 自动修改个人资料（基于情绪变化）
-                # 注意：只有 AiocqhttpMessageEvent 才有 bot 属性
-                if self.auto_profile_updater and isinstance(
-                    event, AiocqhttpMessageEvent
-                ):
-                    # 计算情绪强度
-                    intensity_map = {
-                        EmotionType.EXCITED: 0.9,
-                        EmotionType.HAPPY: 0.6,
-                        EmotionType.SAD: 0.7,
-                        EmotionType.ANGRY: 0.8,
-                        EmotionType.SURPRISED: 0.7,
-                        EmotionType.ANXIOUS: 0.8,
-                        EmotionType.BORED: 0.4,
-                        EmotionType.CONFUSED: 0.5,
-                        EmotionType.CURIOUS: 0.6,
-                        EmotionType.CALM: 0.2,
-                    }
-                    intensity = intensity_map.get(emotion, 0.5)
-
-                    # 异步调用Profile更新
-                    asyncio.create_task(
-                        self._auto_update_profile_on_emotion(
-                            event=event, emotion=emotion, intensity=intensity
-                        )
-                    )
+                # 注意：个人资料更新已移至 on_llm_response_handler，
+                # 基于角色自身回复的情绪来更新（而非用户消息的情绪）
         else:
             logger.debug("情绪检测功能未启用")  # 终端日志
 
@@ -3614,6 +3590,37 @@ class Main(Star):
                 self.experience_bank.update_last_bot_response(session_id, text[:500])
             except Exception as e:
                 logger.debug(f"[经历银行] 记录AI回复失败: {e}")
+
+        # 根据角色自身回复的情绪自动更新个人资料
+        # 角色是一个完整的人，有自己的喜怒哀乐，profile应反映它自身的心情
+        if self.auto_profile_updater and isinstance(event, AiocqhttpMessageEvent):
+            try:
+                bot_emotion = EmotionAnalyzer.analyze_emotion(text)
+                if bot_emotion:
+                    bot_emotion_intensity_map = {
+                        EmotionType.EXCITED: 0.9,
+                        EmotionType.HAPPY: 0.7,
+                        EmotionType.SAD: 0.7,
+                        EmotionType.ANGRY: 0.8,
+                        EmotionType.SURPRISED: 0.6,
+                        EmotionType.ANXIOUS: 0.7,
+                        EmotionType.BORED: 0.5,
+                        EmotionType.CONFUSED: 0.4,
+                        EmotionType.CURIOUS: 0.5,
+                        EmotionType.CALM: 0.2,
+                    }
+                    intensity = bot_emotion_intensity_map.get(bot_emotion, 0.5)
+                    if intensity >= self.auto_profile_updater.threshold:
+                        logger.info(
+                            f"[Profile更新] 角色自身情绪: {bot_emotion.value} (强度: {intensity:.2f})"
+                        )
+                        asyncio.create_task(
+                            self._auto_update_profile_on_emotion(
+                                event=event, emotion=bot_emotion, intensity=intensity
+                            )
+                        )
+            except Exception as e:
+                logger.debug(f"[Profile更新] 角色情绪分析失败: {e}")
 
         # 检测是否包含工具调用
         tool_call = self.parse_tool_call(text)

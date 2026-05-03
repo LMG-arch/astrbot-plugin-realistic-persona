@@ -654,6 +654,15 @@ pip install -r requirements.txt
   - **多源容错保留**：benzhi.online 获取失败时自动降级到百度热搜→必应新闻→搜狗新闻→LLM联网搜索
   - **新闻输出增强**：新闻文本格式新增链接字段，角色可在对话中引用具体新闻链接
 
+- v1.18.1: 修复发说说时间段与次数联动
+  - **修复时间段自动生成**：修改`publish_times_per_day`后，时间段数量不匹配时自动重新生成（如3次→5次，自动分配5个时间段）
+  - **修复默认值不一致**：`main.py`中`publish_time_ranges`默认值从硬编码列表改为`[]`，与schema一致，确保自动生成能正常触发
+
+- v1.18.2: 修复角色情绪自动更新头像bug、情绪来源修正
+  - **修复generate_image缺失bug**：`AutoProfileUpdater`调用了不存在的`LLMAction.generate_image()`，改为使用`_request_image_with_fallback()`
+  - **角色情绪来源修正**：个人资料更新从基于**用户消息情绪**改为基于**角色自身回复情绪**，体现角色是完整的人，有自己的喜怒哀乐
+  - Profile更新现在在`on_llm_response`阶段触发，分析Bot回复文本的情绪来决定是否更新昵称/签名/头像
+
 
 ## 致谢
 

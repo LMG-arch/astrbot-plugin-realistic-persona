@@ -242,11 +242,14 @@ class AutoProfileUpdater:
         intensity: float,
         llm_action=None,
     ) -> dict[str, bool]:
-        """检查情绪并更新Profile
+        """检查角色自身情绪并更新Profile
+
+        根据角色自身的情绪状态（而非用户情绪）来更新资料，
+        体现角色是一个完整的人，有自己的喜怒哀乐。
 
         Args:
             event: 消息事件
-            emotion: 情绪类型
+            emotion: 角色自身的情绪类型
             intensity: 情绪强度（0-1）
             llm_action: LLM操作实例（用于生成头像）
 
@@ -305,8 +308,10 @@ class AutoProfileUpdater:
                 avatar_prompt = self._generate_avatar_prompt(emotion, intensity)
                 logger.info(f"[Profile更新器] 开始生成头像，提示词: {avatar_prompt}")
 
-                # 使用LLM生成头像
-                image_url = await llm_action.generate_image(avatar_prompt)
+                # 使用LLM生成头像（通过图片生成API）
+                image_url = await llm_action._request_image_with_fallback(
+                    avatar_prompt, "1:1"
+                )
                 if image_url:
                     # 设置头像
                     await event.bot.set_qq_avatar(file=image_url)
