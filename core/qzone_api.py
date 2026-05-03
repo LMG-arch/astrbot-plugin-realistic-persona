@@ -184,6 +184,24 @@ class Qzone:
                     timeout=timeout,
                     retry_count=retry_count + 1,
                 )
+            # 限流重试: -10000 表示"使用人数过多，请稍后再试"
+            if code == -10000:
+                logger.warning(
+                    f"[QQ空间] 触发限流(-10000)，等待重试 ({retry_count + 1}/3)..."
+                )
+                import asyncio
+
+                await asyncio.sleep(3 * (retry_count + 1))  # 递增等待: 3s, 6s, 9s
+                return await self._request(
+                    method,
+                    url,
+                    params=params,
+                    data=data,
+                    headers=headers or self.ctx.headers(),
+                    timeout=timeout,
+                    retry_count=retry_count + 1,
+                    debug=debug,
+                )
             if code:
                 logger.warning(f"请求失败: {code}，解析数据: {parse_data}")
                 return False, {"code": code, "message": parse_data.get("message")}

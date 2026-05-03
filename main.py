@@ -2,9 +2,9 @@
 拟人化角色行为系统插件 (Realistic Persona Plugin)
 整合了情绪感知、生活模拟、QQ空间日记、AI配图等功能
 
-版本: v1.13.1
+版本: v1.17.0
 作者: LMG-arch
-最后更新: 2025-07-17
+最后更新: 2026-05-03
 符合AstrBot插件开发完全指南规范
 """
 
@@ -166,7 +166,7 @@ class ThinkingLLM:
     "astrbot_plugin_realistic_persona",
     "LMG-arch",
     "拟人化角色行为系统：情绪感知、生活模拟、QQ空间日记、AI配图、异步思考、人格演化、人生故事引擎等",
-    "1.16.0",
+    "1.17.0",
     "https://github.com/LMG-arch/astrbot-plugin-realistic-persona.git",
 )
 class Main(Star):
@@ -1289,6 +1289,34 @@ class Main(Star):
                 news = await self._maybe_fetch_news(now)
                 if news:
                     context_parts.append(f"今日新闻：{news[:150]}...")  # 限制长度
+
+            # Recent thoughts & activities (from async thinking system)
+            if self.thought_engine:
+                try:
+                    recent_thoughts = self.thought_engine.get_today_thoughts()
+                    if recent_thoughts:
+                        thought_texts = [
+                            t.get("content", "")
+                            for t in recent_thoughts[-3:]
+                            if t.get("content")
+                        ]
+                        if thought_texts:
+                            context_parts.append(
+                                f"最近内心想法：{'；'.join(thought_texts)}"
+                            )
+                    recent_activities = self.thought_engine.get_today_activities()
+                    if recent_activities:
+                        act_texts = [
+                            a.get("content", "")
+                            for a in recent_activities[-3:]
+                            if a.get("content")
+                        ]
+                        if act_texts:
+                            context_parts.append(
+                                f"最近在做的事：{'；'.join(act_texts)}"
+                            )
+                except Exception as e:
+                    logger.debug(f"获取最近思考/活动失败: {e}")
 
             return "\n".join(context_parts) if context_parts else ""
         except Exception as e:

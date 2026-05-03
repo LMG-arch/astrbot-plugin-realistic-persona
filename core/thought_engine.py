@@ -216,17 +216,29 @@ class ThoughtEngine:
 
             context_info = "；".join(context_parts) if context_parts else "暂无额外信息"
 
+            # Anti-repetition: include recent thoughts to avoid redundancy
+            recent_thoughts_text = ""
+            recent = self.get_today_thoughts()
+            if recent:
+                recent_contents = [
+                    r.get("content", "") for r in recent[-5:] if r.get("content")
+                ]
+                if recent_contents:
+                    recent_thoughts_text = f"\n今天已经想过的内容（避免重复）：{'；'.join(recent_contents)}"
+
             prompt = f"""你是{persona_profile if persona_profile else "一个有思考能力的人"}。
 现在是{current_time.strftime("%Y年%m月%d日 %H:%M")}，{time_info}。
 
-当前情境：{context_info}
+当前情境：{context_info}{recent_thoughts_text}
 
-请基于以上真实情境，生成一段属于你自己的内心独白或思考。要求：
-1. 内容真实自然，像真人内心独白，不要泛泛而谈
+请基于以上真实情境，生成一段属于你自己的内心独白。要求：
+1. 内容真实自然，像真人内心独白
 2. 长度在15-50字之间
-3. 必须结合当前的日程、天气、最近聊天内容或经历来思考，体现你是一个有真实生活的人
+3. 必须结合当前的日程、天气、最近聊天内容或经历来思考
 4. 符合你的人设特点，有个人情感色彩
-5. 不要列出信息，而是表达你对这些事情的感受或想法
+5. 表达你对具体事情的感受或想法，不是泛泛的感叹
+6. 与今天已有的思考内容不同，关注新的角度
+7. 适合在对话中自然引用（如"我刚才还在想..."）
 
 内心独白："""
 
@@ -340,9 +352,22 @@ class ThoughtEngine:
                         persona_profile if persona_profile else "一个有生活的人"
                     )
 
+                    # Anti-repetition: include recent activities
+                    recent_activities = self.get_today_activities()
+                    recent_act_text = ""
+                    if recent_activities:
+                        act_contents = [
+                            r.get("content", "")
+                            for r in recent_activities[-5:]
+                            if r.get("content")
+                        ]
+                        if act_contents:
+                            recent_act_text = f"\n今天已经做过的活动（避免重复）：{'；'.join(act_contents)}"
+
                     prompt = f"你是{persona_desc}。\n"
                     prompt += "；".join(context_parts)
-                    prompt += "\n\n请描述你此刻正在做的一件具体日常小事，如在做什么、吃什么、看什么、想什么等。要具体有画面感，不要泛泛而谈。"
+                    prompt += recent_act_text
+                    prompt += "\n\n请描述你此刻正在做的一件具体日常小事，如在做什么、吃什么、看什么、想什么等。要求：具体有画面感，与已记录的活动不同，不要泛泛而谈。"
 
                     activity = await llm_action.generate_activity(prompt)
                     if activity:

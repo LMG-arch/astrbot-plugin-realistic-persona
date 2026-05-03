@@ -355,7 +355,7 @@
     "type": "int",
     "default": 25,
     "condition": {"enable_async_thinking": true},
-    "hint": "每隔多少分钟记录一次日常活动。活动内容由LLM根据当前时间段和人设生成（如"泡了杯咖啡，翻看论文"），而非随机模板。建议20-40分钟"
+    "hint": "每隔多少分钟记录一次日常活动。活动内容由LLM根据当前时间段和人设生成（如'泡了杯咖啡，翻看论文'），而非随机模板。建议20-40分钟"
   },
   
   "_section_profile_auto_update": {
