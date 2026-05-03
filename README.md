@@ -532,14 +532,12 @@ pip install -r requirements.txt
     - `get_astrbot_data_path()`替换为公共API `StarTools.get_data_dir()`
     - 移除未使用的导入（`cast`、`Path`）和不规范的内部模块引用
 
-- v1.13.0: LLM上下文感知绘图提示词生成、核心Bug修复
+- v1.13.0: LLM上下文感知绘图提示词生成
   - **LLM上下文感知绘图提示词生成**：使用LLM根据对话历史、角色人设、日程、天气、情绪等上下文信息自动生成详细绘图提示词，替代简单的关键词拼接方式
   - **LLM不可用时自动回退**：当LLM未配置或调用失败时，自动回退到关键词拼接方式，确保绘图功能始终可用
   - **绘画历史参考**：自动参考最近2天的绘画记录，避免重复生成相同内容
   - **英文提示词优化**：LLM自动生成包含人物外貌、穿搭、场景、时间、光线、风格等细节的英文提示词
   - **详细LLM使用日志**：明确记录是否使用LLM生成提示词（✅/⚠️/ℹ️标识），方便调试
-  - **修复AstrBot核心400 BadRequestError**：修复`ToolSet.openai_schema()`和`get_param_only_tool_set()`中工具描述为空时导致的OpenAI API 400错误（description=None）
-  - **修复json5依赖缺失**：QQ空间模块依赖json5但未正确安装，导致QQ空间功能无法加载
 
 
 ## 致谢
