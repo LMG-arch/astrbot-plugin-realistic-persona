@@ -2312,10 +2312,11 @@ class Main(Star):
 
     @filter.llm_tool(name="draw")
     async def draw(self, event: AstrMessageEvent, prompt: str, size: str = "1024x1024"):
-        """根据提示词生成图片，支持AI自拍和情绪表达
+        """根据用户请求生成图片。会先结合对话历史、角色人设、日程、天气、情绪等上下文信息，
+        用LLM生成详细的绘图提示词后再生成图片。
 
         Args:
-            prompt (str): 图片提示词，应包含主体、场景、风格等必要信息。例如：“一个开心微笑的中国女孩，真实风格，明亮色彩”
+            prompt (str): 用户的绘图请求描述，例如"发张自拍"、"画一个风景"
             size (str): 图片尺寸，默认为1024x1024。可选项：768x1344（竖屏）、1344x768（横屏）、512x512（小方形）
 
         Returns:
@@ -2336,32 +2337,31 @@ class Main(Star):
             return "API密钥未配置，无法生成图片"
 
         try:
-            # 获取当前会话的情绪上下文
+            # Get emotion context for logging
             session_id = event.get_session_id()
             emotion_analysis = self.context_state.get_state(
                 session_id, "emotion_analysis"
             )
-
-            # 如果有情绪信息，优化提示词
             if emotion_analysis and emotion_analysis.get("emotion"):
                 emotion = emotion_analysis["emotion"]
-                logger.debug(f"检测到情绪: {emotion.value}, 生成图片: {prompt}")
+                logger.debug(f"[绘图工具] 检测到情绪: {emotion.value}")
 
+            # Use LLM to generate context-aware drawing prompt
+            logger.info("[绘图工具] 开始根据上下文生成绘图提示词...")
+            enhanced_prompt = await self._enhance_drawing_prompt(prompt, event=event)
+            logger.info(f"[绘图工具] 生成的提示词: {enhanced_prompt[:150]}...")
+
+            # Request image with enhanced prompt
             logger.info("[绘图工具] 开始请求图片生成...")
-            # 发送图片生成请求
-            image_url = await self._request_image(prompt, size)
+            image_url = await self._request_image(enhanced_prompt, size)
             logger.info(f"[绘图工具] 图片生成成功: {image_url}")
 
-            # 构造并发送图片消息给用户（只发送图片，不加任何文字）
             chain: list[BaseMessageComponent] = [Image.fromURL(image_url)]
 
             logger.info("[绘图工具] 发送图片给用户...")
-            # 发送消息给用户（在后台发送，不返回给LLM）
             await event.send(event.chain_result(chain))
             logger.info("[绘图工具] 图片已发送")
 
-            # 返回给 LLM 的指示：让它生成自然的文字回复
-            # 根据用户偏好：多模态响应必须附带文字说明
             return (
                 f"图片已发送给用户。\n"
                 f"图片内容：{prompt}\n\n"
@@ -2373,8 +2373,6 @@ class Main(Star):
         except Exception as e:
             error_msg = f"生成图片时遇到问题: {str(e)}"
             logger.error(f"[绘图工具] 失败: {error_msg}")
-            # 根据用户偏好，多模态响应必须附带文字说明，禁止仅发送图片
-            # 如果图片生成失败，发送错误信息给用户
             await event.send(event.plain_result(error_msg))
             return f"图片生成失败：{str(e)}"
 
@@ -2670,179 +2668,246 @@ class Main(Star):
         self, original_prompt: str, event: AstrMessageEvent | None = None
     ) -> str:
         """
-        增强绘画提示词，结合人设、历史对话、日程和天气
+        使用 LLM 根据上下文（人设、日程、天气、情绪、对话历史等）生成详细的绘图提示词。
+
+        优先使用 LLM 生成，若 LLM 不可用则回退到关键词拼接方式。
 
         Args:
-            original_prompt: 原始提示词（来自LLM）
-            event: 当前事件（用于获取历史对话）
+            original_prompt: 原始绘图请求（来自 draw 工具参数）
+            event: 当前事件（用于获取会话上下文）
 
         Returns:
-            增强后的提示词
+            LLM 生成的详细绘图提示词
         """
         try:
             now = datetime.now()
 
-            # 获取人设信息
+            # ============ 1. 收集所有上下文信息 ============
+
+            # 人设
             persona_profile = await self._get_persona_profile()
             if not persona_profile:
                 persona_profile = await self._get_system_persona_profile()
 
-            # 获取天气信息
-            weather_desc = await self._get_weather_desc()
-
-            # 获取日程信息
+            # 日程与穿搭
             schedule_text = await self._maybe_generate_schedule(now)
-
-            # 提取今日穿搭信息
             outfit = ""
-            if schedule_text and (
-                "今日穿搭" in schedule_text or "穿搭" in schedule_text
-            ):
-                lines = schedule_text.split("\n")
-                for line in lines:
+            if schedule_text:
+                for line in schedule_text.split("\n"):
                     if "今日穿搭" in line or "穿搭" in line or "穿着" in line:
                         outfit = (
-                            line.replace("今日穿搭：", "").replace("穿搭：", "").strip()
+                            line.replace("今日穿搭：", "")
+                            .replace("穿搭：", "")
+                            .replace("穿着：", "")
+                            .strip()
                         )
                         break
 
-            # 获取历史对话摘要（最近几条）
-            conversation_context = ""
-            if event and hasattr(event, "message_obj"):
-                try:
-                    # 获取会话ID
-                    session_id = event.get_session_id()
-                    # 尝试从上下文获取最近的对话
-                    if hasattr(self, "context") and hasattr(
-                        self.context, "conversation_mgr"
-                    ):
-                        recent_messages = (
-                            await self.context.conversation_mgr.get_messages(
-                                session_id=session_id, count=5
-                            )
-                        )
-                        if recent_messages:
-                            # 提取文本内容
-                            msg_texts = []
-                            for msg in recent_messages[-3:]:  # 只取最近3条
-                                if hasattr(msg, "message"):
-                                    msg_texts.append(str(msg.message)[:100])  # 限制长度
-                            if msg_texts:
-                                conversation_context = "最近对话：" + " -> ".join(
-                                    msg_texts
-                                )
-                except Exception as e:
-                    logger.debug(f"[绘画提示词增强] 获取历史对话失败: {e}")
+            # 天气
+            weather_desc = await self._get_weather_desc()
 
-            # 获取历史绘画提示词（最近几次）
+            # 情绪
+            emotion_desc = ""
+            if event:
+                try:
+                    session_id = event.get_session_id()
+                    emotion_analysis = self.context_state.get_state(
+                        session_id, "emotion_analysis"
+                    )
+                    if emotion_analysis and emotion_analysis.get("emotion"):
+                        em = emotion_analysis["emotion"]
+                        emotion_desc = (
+                            str(em.value) if hasattr(em, "value") else str(em)
+                        )
+                except Exception:
+                    pass
+
+            # 最近对话
+            recent_conv = ""
+            try:
+                if self.experience_bank:
+                    convs = self.experience_bank.get_recent_conversations(limit=5)
+                    if convs:
+                        conv_items = []
+                        for c in convs[-3:]:
+                            user_msg = c.get("user_message", "")[:80]
+                            if user_msg:
+                                conv_items.append(f"用户: {user_msg}")
+                        if conv_items:
+                            recent_conv = "；".join(conv_items)
+            except Exception as e:
+                logger.debug(f"[绘图提示词生成] 获取最近对话失败: {e}")
+
+            # 历史绘画（避免重复）
             drawing_history = ""
             try:
                 recent_prompts = self.local_data_manager.get_recent_drawing_prompts(
                     days=2, max_count=3
                 )
                 if recent_prompts:
-                    history_items = []
-                    for item in recent_prompts:
-                        original = item.get("original_prompt", "")[:50]
-                        history_items.append(original)
+                    history_items = [
+                        item.get("original_prompt", "")[:50]
+                        for item in recent_prompts
+                        if item.get("original_prompt")
+                    ]
                     if history_items:
-                        drawing_history = "历史绘画：" + "；".join(history_items)
-                        logger.debug(
-                            f"[绘画提示词增强] 加载了{len(history_items)}条历史绘画提示词"
-                        )
+                        drawing_history = "；".join(history_items)
             except Exception as e:
-                logger.debug(f"[绘画提示词增强] 获取历史绘画提示词失败: {e}")
+                logger.debug(f"[绘图提示词生成] 获取历史绘画失败: {e}")
 
-            # 构建增强后的提示词
-            enhanced_parts = []
-
-            # 1. 核心绘画内容（原始prompt）
-            enhanced_parts.append(f"画面内容：{original_prompt}")
-
-            # 2. 人物形象（基于人设）
-            if persona_profile:
-                # 提取关键外貌特征
-                age_match = re.search(r"(\d+)岁", persona_profile)
-                gender_hints = []
-                if "女" in persona_profile or "她" in persona_profile:
-                    gender_hints.append("女性")
-                elif "男" in persona_profile or "他" in persona_profile:
-                    gender_hints.append("男性")
-
-                appearance_desc = ""
-                if age_match:
-                    appearance_desc += f"{age_match.group(1)}岁"
-                if gender_hints:
-                    appearance_desc += gender_hints[0]
-
-                if appearance_desc:
-                    enhanced_parts.append(f"人物：{appearance_desc}")
-
-            # 3. 穿搭信息（确保一致性）
-            if outfit:
-                enhanced_parts.append(f"穿着：{outfit}")
-
-            # 4. 天气和场景氛围
-            if weather_desc:
-                enhanced_parts.append(f"天气：{weather_desc}")
-
-            # 5. 时间信息
+            # 时间
             hour = now.hour
             if 5 <= hour < 8:
-                time_desc = "清晨，柔和的晨光"
+                time_desc = "清晨"
             elif 8 <= hour < 12:
-                time_desc = "上午，明亮的日光"
+                time_desc = "上午"
             elif 12 <= hour < 14:
-                time_desc = "中午，强烈的阳光"
+                time_desc = "中午"
             elif 14 <= hour < 18:
-                time_desc = "下午，温暖的光线"
+                time_desc = "下午"
             elif 18 <= hour < 20:
-                time_desc = "傍晚，金色的夕阳"
+                time_desc = "傍晚"
             elif 20 <= hour < 22:
-                time_desc = "夜晚，柔和的灯光"
+                time_desc = "夜晚"
             else:
-                time_desc = "深夜，昏暗的光线"
+                time_desc = "深夜"
 
-            enhanced_parts.append(f"时间：{time_desc}")
-
-            # 6. 风格要求
-            style_desc = "风格：真实摄影风格，自然光线，高清细节"
-
-            # 从配置文件读取绘画禁止规则
+            # 禁止规则
             forbidden_rules = self.config.get("image_forbidden_rules", "").strip()
-            if forbidden_rules:
-                style_desc += "。" + forbidden_rules
 
-            enhanced_parts.append(style_desc)
+            # ============ 2. 使用 LLM 生成详细提示词 ============
 
-            # 7. 对话上下文（帮助理解用户意图）
-            if conversation_context:
-                enhanced_parts.append(f"背景：{conversation_context}")
-
-            # 8. 历史绘画（避免重复）
-            if drawing_history:
-                enhanced_parts.append(f"参考：{drawing_history}")
-
-            # 合并所有部分
-            enhanced_prompt = "，".join(enhanced_parts)
-
-            # 保存到本地
-            try:
-                self.local_data_manager.save_drawing_prompt(
-                    original_prompt, enhanced_prompt
+            provider_id = self._get_provider_id()
+            if provider_id and self.context and hasattr(self.context, "llm_generate"):
+                meta_prompt = (
+                    f"你是一个专业的AI绘图提示词生成器。根据以下上下文信息，将用户的绘图请求转化为一段详细的、"
+                    f"适合AI图片生成模型的英文提示词。\n\n"
+                    f"## 用户绘图请求\n{original_prompt}\n\n"
+                    f"## 角色人设\n{persona_profile[:500] if persona_profile else '未配置'}\n\n"
+                    f"## 今日穿搭\n{outfit if outfit else '未指定'}\n\n"
+                    f"## 天气情况\n{weather_desc if weather_desc else '未知'}\n\n"
+                    f"## 当前时间\n{time_desc}\n\n"
+                    f"## 情绪状态\n{emotion_desc if emotion_desc else '未知'}\n\n"
+                    f"## 最近对话\n{recent_conv if recent_conv else '无'}\n\n"
+                    f"## 历史绘画（避免重复）\n{drawing_history if drawing_history else '无'}\n\n"
+                    f"## 禁止规则\n{forbidden_rules if forbidden_rules else '无'}\n\n"
+                    f"## 要求\n"
+                    f"1. 提示词必须是英文\n"
+                    f"2. 必须包含人物外貌、穿搭、场景、时间、光线、风格等细节\n"
+                    f"3. 确保人物形象与人设一致\n"
+                    f"4. 穿搭信息要与今日穿搭匹配\n"
+                    f"5. 场景氛围要与天气和时间一致\n"
+                    f"6. 严格遵守所有禁止规则\n"
+                    f"7. 避免与历史绘画重复\n"
+                    f"8. 只输出提示词本身，不要有任何解释或前缀\n\n"
+                    f"英文提示词："
                 )
-            except Exception as e:
-                logger.debug(f"[绘画提示词增强] 保存失败: {e}")
 
-            logger.info(f"[绘画提示词增强] 原始: {original_prompt[:50]}...")
-            logger.info(f"[绘画提示词增强] 增强后: {enhanced_prompt[:100]}...")
+                try:
+                    resp = await self.context.llm_generate(
+                        chat_provider_id=provider_id,
+                        prompt=meta_prompt,
+                    )
+                    generated = (resp.completion_text or "").strip()
+                    if generated:
+                        # Clean up possible markdown formatting
+                        generated = generated.strip("`").strip()
+                        for prefix in (
+                            "Prompt:",
+                            "prompt:",
+                            "PROMPT:",
+                            "English prompt:",
+                        ):
+                            if generated.startswith(prefix):
+                                generated = generated[len(prefix) :].strip()
+                        logger.info(f"[绘图提示词生成] LLM生成: {generated[:100]}...")
+                        # Save
+                        try:
+                            self.local_data_manager.save_drawing_prompt(
+                                original_prompt, generated
+                            )
+                        except Exception as e:
+                            logger.debug(f"[绘图提示词生成] 保存失败: {e}")
+                        return generated
+                except Exception as e:
+                    logger.warning(f"[绘图提示词生成] LLM生成失败，回退到拼接方式: {e}")
 
-            return enhanced_prompt
+            # ============ 3. 回退：关键词拼接方式 ============
+            return self._build_drawing_prompt_fallback(
+                original_prompt,
+                persona_profile=persona_profile,
+                outfit=outfit,
+                weather_desc=weather_desc,
+                time_desc=time_desc,
+                forbidden_rules=forbidden_rules,
+                conversation_context=recent_conv,
+                drawing_history=drawing_history,
+            )
 
         except Exception as e:
-            logger.error(f"[绘画提示词增强] 失败: {e}", exc_info=True)
-            # 出错时返回原始提示词
+            logger.error(f"[绘图提示词生成] 失败: {e}", exc_info=True)
             return original_prompt
+
+    def _build_drawing_prompt_fallback(
+        self,
+        original_prompt: str,
+        persona_profile: str = "",
+        outfit: str = "",
+        weather_desc: str = "",
+        time_desc: str = "",
+        forbidden_rules: str = "",
+        conversation_context: str = "",
+        drawing_history: str = "",
+    ) -> str:
+        """关键词拼接方式生成绘图提示词（LLM 不可用时的回退方案）"""
+        enhanced_parts = [f"画面内容：{original_prompt}"]
+
+        if persona_profile:
+            age_match = re.search(r"(\d+)岁", persona_profile)
+            gender_hints = []
+            if "女" in persona_profile or "她" in persona_profile:
+                gender_hints.append("女性")
+            elif "男" in persona_profile or "他" in persona_profile:
+                gender_hints.append("男性")
+            appearance_desc = ""
+            if age_match:
+                appearance_desc += f"{age_match.group(1)}岁"
+            if gender_hints:
+                appearance_desc += gender_hints[0]
+            if appearance_desc:
+                enhanced_parts.append(f"人物：{appearance_desc}")
+
+        if outfit:
+            enhanced_parts.append(f"穿着：{outfit}")
+        if weather_desc:
+            enhanced_parts.append(f"天气：{weather_desc}")
+
+        time_light_map = {
+            "清晨": "清晨，柔和的晨光",
+            "上午": "上午，明亮的日光",
+            "中午": "中午，强烈的阳光",
+            "下午": "下午，温暖的光线",
+            "傍晚": "傍晚，金色的夕阳",
+            "夜晚": "夜晚，柔和的灯光",
+            "深夜": "深夜，昏暗的光线",
+        }
+        enhanced_parts.append(
+            f"时间：{time_light_map.get(time_desc, '白天，自然光线')}"
+        )
+
+        style_desc = "风格：真实摄影风格，自然光线，高清细节"
+        if forbidden_rules:
+            style_desc += "。" + forbidden_rules
+        enhanced_parts.append(style_desc)
+
+        if conversation_context:
+            enhanced_parts.append(f"背景：{conversation_context}")
+        if drawing_history:
+            enhanced_parts.append(f"参考：{drawing_history}")
+
+        enhanced_prompt = "，".join(enhanced_parts)
+        logger.info(f"[绘图提示词回退] 拼接: {enhanced_prompt[:100]}...")
+        return enhanced_prompt
 
     async def execute_tool_call(self, tool_name: str, params: dict) -> str | None:
         """
