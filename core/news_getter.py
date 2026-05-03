@@ -82,6 +82,7 @@ class NewsGetter:
 
         # 多个API源，按优先级排列
         api_sources = [
+            self._fetch_from_benzhi,
             self._fetch_from_baidu_news,
             self._fetch_from_bing_news,
             self._fetch_from_generic_api,
@@ -99,6 +100,68 @@ class NewsGetter:
                 continue
 
         logger.error("[新闻获取器] 所有新闻源均获取失败")
+        return None
+
+    async def _fetch_from_benzhi(self, topics: list[str]) -> dict | None:
+        """从 benzhi.online 每日新闻API获取数据（结构化XML，优先级最高）
+
+        Args:
+            topics: 新闻主题列表（本API不使用，接口返回全量新闻）
+
+        Returns:
+            新闻数据字典或None
+        """
+        try:
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            url = f"https://benzhi.online/api/daily-news?date={today_str}"
+
+            async with aiohttp.ClientSession() as session:
+                timeout = aiohttp.ClientTimeout(total=15)
+                async with session.get(url, timeout=timeout) as resp:
+                    if resp.status == 200:
+                        text = await resp.text()
+                        import re
+
+                        # Parse XML: <item><title>...</title><summary>...</summary><link>...</link></item>
+                        items = re.findall(
+                            r"<item>\s*<title>(.*?)</title>\s*<summary>(.*?)</summary>\s*<link>(.*?)</link>\s*</item>",
+                            text,
+                            re.DOTALL,
+                        )
+                        if items:
+                            news_list = []
+                            for title, summary, link in items[:5]:
+                                title = title.strip()
+                                summary = summary.strip()
+                                if title:
+                                    item = {"title": title, "summary": summary}
+                                    if link.strip():
+                                        item["link"] = link.strip()
+                                    news_list.append(item)
+                            if news_list:
+                                logger.info(
+                                    f"[新闻获取器] benzhi.online 获取到 {len(news_list)} 条新闻"
+                                )
+                                return {
+                                    "date": today_str,
+                                    "news": news_list,
+                                    "source": "每日新闻(benzhi.online)",
+                                }
+                        logger.debug("[新闻获取器] benzhi.online 返回数据无有效条目")
+                    elif resp.status == 429:
+                        logger.warning("[新闻获取器] benzhi.online 触发限流(429)")
+                    elif resp.status == 400:
+                        body = await resp.text()
+                        logger.warning(
+                            f"[新闻获取器] benzhi.online 请求错误(400): {body}"
+                        )
+                    else:
+                        logger.debug(
+                            f"[新闻获取器] benzhi.online 返回状态码: {resp.status}"
+                        )
+        except Exception as e:
+            logger.debug(f"[新闻获取器] benzhi.online API错误: {e}")
+
         return None
 
     async def _fetch_from_baidu_news(self, topics: list[str]) -> dict | None:
@@ -284,11 +347,14 @@ class NewsGetter:
             for i, item in enumerate(news_items, 1):
                 title = item.get("title", "").strip()
                 summary = item.get("summary", "").strip()
+                link = item.get("link", "").strip()
 
                 if title:
                     text += f"{i}. {title}\n"
                     if summary:
                         text += f"   {summary}\n"
+                    if link:
+                        text += f"   链接：{link}\n"
 
             text += f"\n【数据来源】{source}"
             return text
