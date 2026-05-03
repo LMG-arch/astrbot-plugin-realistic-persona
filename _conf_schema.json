@@ -219,7 +219,6 @@
     "description": "启用新闻获取模块",
     "type": "bool",
     "default": true,
-    "condition": {"enable_life_simulation": true},
     "hint": "是否使用独立的新闻获取模块（支持多源容错），而非仅依赖LLM联网功能"
   },
   "news_online_fetch": {

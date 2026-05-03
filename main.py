@@ -340,7 +340,7 @@ class Main(Star):
                 logger.info("人生故事引擎未启用")
 
             # 初始化新闻获取模块
-            if self.enable_news_getter and self.enable_life_simulation:
+            if self.enable_news_getter:
                 news_dir = (
                     StarTools.get_data_dir("astrbot_plugin_realistic_persona")
                     / "news_data"
@@ -443,32 +443,8 @@ class Main(Star):
                     StarTools.get_data_dir("astrbot_plugin_realistic_persona")
                     / "life_story"
                 )
-                life_story_file = story_dir / "life_story.json"
-                context_cache_file = story_dir / "context_cache.json"
                 state_file = story_dir / "engine_state.json"
-
-                display_parts = []
-
-                if life_story_file.exists():
-                    with open(life_story_file, encoding="utf-8") as f:
-                        story = json.load(f)
-                    timeline = story.get("timeline", [])
-                    if timeline:
-                        display_parts.append("=== 人生经历线 ===")
-                        for ch in timeline:
-                            chapter = ch.get("chapter", "?")
-                            content = ch.get("content", "")
-                            time_str = ch.get("time", "")[:10]
-                            display_parts.append(
-                                f"\n[第{chapter}章] {time_str}\n{content[:300]}"
-                            )
-
-                if context_cache_file.exists():
-                    with open(context_cache_file, encoding="utf-8") as f:
-                        cache = json.load(f)
-                    compact = cache.get("compact_context", "")
-                    if compact:
-                        display_parts.append(f"\n\n=== 当前精简上下文 ===\n{compact}")
+                life_story_file = story_dir / "life_story.json"
 
                 if state_file.exists():
                     with open(state_file, encoding="utf-8") as f:
@@ -481,16 +457,20 @@ class Main(Star):
                         if last_ts > 0
                         else "未更新"
                     )
-                    display_parts.append(
-                        f"\n\n=== 引擎状态 ===\n"
-                        f"当前章节: 第{ch_num}章\n"
-                        f"更新次数: {update_count}\n"
-                        f"上次更新: {last_str}"
-                    )
 
-                if display_parts:
-                    self.config["life_story_display"] = "\n".join(display_parts)
-                    logger.info("已加载人生故事到配置显示")
+                    # Count timeline entries
+                    chapter_count = 0
+                    if life_story_file.exists():
+                        with open(life_story_file, encoding="utf-8") as f:
+                            story = json.load(f)
+                        chapter_count = len(story.get("timeline", []))
+
+                    self.config["life_story_display"] = (
+                        f"📊 引擎状态 | 第{ch_num}章 | 更新{update_count}次 | 上次: {last_str}\n"
+                        f"📜 共记录 {chapter_count} 章人生经历\n\n"
+                        f"💡 使用 /life_story 命令查看完整人生故事预览"
+                    )
+                    logger.info("已加载人生故事摘要到配置显示")
                 else:
                     self.config["life_story_display"] = (
                         "（人生故事尚未生成，请等待系统自动生成）"
@@ -2029,6 +2009,193 @@ class Main(Star):
 
         return weather_text or ""
 
+    @staticmethod
+    def _parse_weather_for_drawing(raw_weather: str) -> str:
+        """Parse raw weather data into a clean description for drawing prompts.
+
+        Transforms formats like "zhenxiong: 🌦 +7°C" into clean descriptions
+        like "阴天，气温7摄氏度" suitable for LLM prompt generation.
+
+        Args:
+            raw_weather: Raw weather string from wttr.in or other source
+
+        Returns:
+            Clean weather description for drawing context
+        """
+        if not raw_weather:
+            return ""
+
+        import re
+
+        weather = raw_weather.strip()
+
+        # Remove location prefix (e.g. "zhenxiong: " or "Beijing: ")
+        # wttr.in format: "location: emoji temp°C"
+        if ":" in weather:
+            weather = weather.split(":", 1)[1].strip()
+
+        # Map emoji/weather symbols to Chinese descriptions
+        weather_map = {
+            "☀": "晴天",
+            "🌤": "晴间多云",
+            "⛅": "多云",
+            "🌥": "阴天",
+            "☁": "阴天",
+            "🌦": "小雨",
+            "🌧": "下雨",
+            "⛈": "雷雨",
+            "🌩": "雷电",
+            "🌨": "下雪",
+            "❄": "下雪",
+            "🌫": "雾天",
+            "🌪": "大风",
+            "💨": "大风",
+        }
+
+        weather_desc = ""
+        for emoji, desc in weather_map.items():
+            if emoji in weather:
+                weather_desc = desc
+                break
+
+        # Extract temperature
+        temp_match = re.search(r"[+-]?\d+[°℃]", weather)
+        if temp_match:
+            temp_str = temp_match.group(0).replace("°C", "").replace("℃", "")
+            try:
+                temp = int(temp_str)
+                if temp < 0:
+                    weather_desc = (
+                        f"寒冷，{temp}°C"
+                        if not weather_desc
+                        else f"{weather_desc}，{temp}°C"
+                    )
+                elif temp < 10:
+                    weather_desc = (
+                        f"凉爽，{temp}°C"
+                        if not weather_desc
+                        else f"{weather_desc}，{temp}°C"
+                    )
+                elif temp < 25:
+                    weather_desc = (
+                        f"温和，{temp}°C"
+                        if not weather_desc
+                        else f"{weather_desc}，{temp}°C"
+                    )
+                elif temp < 35:
+                    weather_desc = (
+                        f"炎热，{temp}°C"
+                        if not weather_desc
+                        else f"{weather_desc}，{temp}°C"
+                    )
+                else:
+                    weather_desc = (
+                        f"酷热，{temp}°C"
+                        if not weather_desc
+                        else f"{weather_desc}，{temp}°C"
+                    )
+            except ValueError:
+                pass
+
+        if not weather_desc:
+            # If no emoji found, try to return something reasonable
+            weather_desc = weather[:30] if weather else ""
+
+        return weather_desc
+
+    @staticmethod
+    def _get_current_period_schedule(schedule_text: str, now: datetime) -> str:
+        """Extract only the current time period's schedule for drawing prompt.
+
+        Matches time-based schedule segments to the current hour.
+
+        Args:
+            schedule_text: Full schedule text for the day
+            now: Current datetime
+
+        Returns:
+            The schedule segment for the current time period, or empty string
+        """
+        if not schedule_text:
+            return ""
+
+        hour = now.hour
+        # Define time period patterns to match
+        time_patterns = []
+        if 6 <= hour < 9:
+            time_patterns = [
+                "6:00",
+                "6：00",
+                "早上",
+                "上午(6",
+                "早晨",
+                "7:00",
+                "7：00",
+                "8:00",
+                "8：00",
+            ]
+        elif 9 <= hour < 12:
+            time_patterns = ["9:00", "9：00", "上午", "工作", "上课", "10:00", "11:00"]
+        elif 12 <= hour < 14:
+            time_patterns = ["12:00", "12：00", "中午", "午餐", "午休", "13:00"]
+        elif 14 <= hour < 18:
+            time_patterns = ["14:00", "14：00", "下午", "15:00", "16:00", "17:00"]
+        elif 18 <= hour < 20:
+            time_patterns = [
+                "18:00",
+                "18：00",
+                "傍晚",
+                "晚餐",
+                "前晚",
+                "19:00",
+                "19：00",
+            ]
+        elif 20 <= hour < 23:
+            time_patterns = [
+                "20:00",
+                "20：00",
+                "晚上",
+                "21:00",
+                "22:00",
+                "娱乐",
+                "休闲",
+            ]
+        else:
+            time_patterns = ["23:00", "23：00", "睡前", "深夜", "睡觉"]
+
+        lines = schedule_text.split("\n")
+        matched_lines = []
+        for i, line in enumerate(lines):
+            line_clean = line.strip().replace("**", "").replace("*", "")
+            for pattern in time_patterns:
+                if pattern in line_clean:
+                    matched_lines.append(line_clean)
+                    # Also include the next line if it's a continuation
+                    if i + 1 < len(lines):
+                        next_line = (
+                            lines[i + 1].strip().replace("**", "").replace("*", "")
+                        )
+                        if next_line and not any(
+                            p in next_line
+                            for p in [
+                                "6:00",
+                                "9:00",
+                                "12:00",
+                                "14:00",
+                                "18:00",
+                                "20:00",
+                                "23:00",
+                            ]
+                        ):
+                            matched_lines.append(next_line)
+                    break
+
+        if matched_lines:
+            return "\n".join(matched_lines)
+
+        # Fallback: return first 100 chars of schedule
+        return schedule_text[:100]
+
     async def _get_thinking_context(self) -> dict:
         """为异步思考提供上下文信息（天气、日程、新闻、最近对话和经历）
 
@@ -2291,9 +2458,12 @@ class Main(Star):
             "Content-Type": "application/json",
         }
 
+        # 从配置文件读取模型名称
+        openai_model = self.config.get("openai_model", "dall-e-3")
+
         # 构建请求数据
         payload = {
-            "model": "dall-e-3",  # 或者使用 "dall-e-2"
+            "model": openai_model,
             "prompt": prompt,
             "n": 1,
             "size": openai_size,
@@ -2354,9 +2524,12 @@ class Main(Star):
             "Content-Type": "application/json",
         }
 
+        # 从配置文件读取模型名称
+        aliyun_model = self.config.get("aliyun_model", "wanx-v1")
+
         # 构建请求数据
         payload = {
-            "model": "wanx-v1",  # 阿里云通义万相模型
+            "model": aliyun_model,
             "input": {
                 "prompt": prompt,
                 "size": ali_size,
@@ -2554,6 +2727,82 @@ class Main(Star):
             status = "暂无情绪数据"
 
         yield event.plain_result(status)
+
+    @filter.command("life_story")
+    async def show_life_story(self, event: AstrMessageEvent):
+        """查看人生故事预览"""
+        if not self.enable_life_story or not self.life_story_engine:
+            yield event.plain_result("人生故事引擎未启用")
+            return
+
+        try:
+            story_dir = (
+                StarTools.get_data_dir("astrbot_plugin_realistic_persona")
+                / "life_story"
+            )
+            life_story_file = story_dir / "life_story.json"
+            context_cache_file = story_dir / "context_cache.json"
+            state_file = story_dir / "engine_state.json"
+
+            display_parts = ["📖 人生故事预览\n"]
+
+            # Engine state
+            if state_file.exists():
+                with open(state_file, encoding="utf-8") as f:
+                    state = json.load(f)
+                ch_num = state.get("current_chapter", 0)
+                update_count = state.get("update_count", 0)
+                last_ts = state.get("last_update_time", 0)
+                last_str = (
+                    datetime.fromtimestamp(last_ts).strftime("%Y-%m-%d %H:%M")
+                    if last_ts > 0
+                    else "未更新"
+                )
+                display_parts.append(
+                    f"📊 引擎状态\n"
+                    f"  当前章节: 第{ch_num}章\n"
+                    f"  更新次数: {update_count}\n"
+                    f"  上次更新: {last_str}\n"
+                )
+
+            # Life story timeline
+            if life_story_file.exists():
+                with open(life_story_file, encoding="utf-8") as f:
+                    story = json.load(f)
+                timeline = story.get("timeline", [])
+                if timeline:
+                    display_parts.append("━━━━ 📜 人生经历线 ━━━━\n")
+                    for ch in timeline[-5:]:  # Show last 5 chapters
+                        chapter = ch.get("chapter", "?")
+                        content = ch.get("content", "")
+                        time_str = ch.get("time", "")[:10]
+                        # Truncate long content for display
+                        if len(content) > 200:
+                            content = content[:200] + "..."
+                        display_parts.append(
+                            f"📕 第{chapter}章 ({time_str})\n{content}\n"
+                        )
+                else:
+                    display_parts.append("📜 人生故事尚未生成\n")
+            else:
+                display_parts.append("📜 人生故事尚未生成\n")
+
+            # Context cache
+            if context_cache_file.exists():
+                with open(context_cache_file, encoding="utf-8") as f:
+                    cache = json.load(f)
+                compact = cache.get("compact_context", "")
+                if compact:
+                    if len(compact) > 300:
+                        compact = compact[:300] + "..."
+                    display_parts.append(f"━━━━ 📝 当前精简上下文 ━━━━\n{compact}\n")
+
+            if len(display_parts) <= 1:
+                display_parts.append("（人生故事尚未生成，请等待系统自动生成）")
+
+            yield event.plain_result("\n".join(display_parts))
+        except Exception as e:
+            yield event.plain_result(f"获取人生故事失败: {str(e)}")
 
     @filter.command("personality_status")
     async def check_personality_status(self, event: AstrMessageEvent):
@@ -2823,17 +3072,35 @@ class Main(Star):
             outfit = ""
             if schedule_text:
                 for line in schedule_text.split("\n"):
-                    if "今日穿搭" in line or "穿搭" in line or "穿着" in line:
-                        outfit = (
-                            line.replace("今日穿搭：", "")
-                            .replace("穿搭：", "")
-                            .replace("穿着：", "")
-                            .strip()
-                        )
-                        break
+                    line_clean = line.strip().lstrip("0123456789.、·-").strip()
+                    line_clean = line_clean.replace("**", "").replace("*", "").strip()
+                    if "穿搭" in line_clean or "穿着" in line_clean:
+                        # Extract the actual outfit description
+                        for prefix in (
+                            "今日穿搭：",
+                            "穿搭：",
+                            "穿着：",
+                            "今日穿搭:",
+                            "穿搭:",
+                            "穿着:",
+                        ):
+                            if prefix in line_clean:
+                                outfit = line_clean.split(prefix, 1)[1].strip()
+                                break
+                        if not outfit and (
+                            "穿搭" in line_clean or "穿着" in line_clean
+                        ):
+                            # Try to get text after colon or other separator
+                            for sep in ("：", ":", "，"):
+                                if sep in line_clean:
+                                    outfit = line_clean.split(sep, 1)[1].strip()
+                                    break
+                        if outfit:
+                            break
 
-            # 天气
-            weather_desc = await self._get_weather_desc()
+            # 天气 - parse raw weather data into clean description
+            raw_weather = await self._get_weather_desc()
+            weather_desc = self._parse_weather_for_drawing(raw_weather)
 
             # 情绪
             emotion_desc = ""
@@ -2904,6 +3171,9 @@ class Main(Star):
             # 禁止规则
             forbidden_rules = self.config.get("image_forbidden_rules", "").strip()
 
+            # 当前时段日程
+            current_schedule = self._get_current_period_schedule(schedule_text, now)
+
             # ============ 2. 使用 LLM 生成详细提示词 ============
 
             provider_id = self._get_provider_id()
@@ -2917,6 +3187,7 @@ class Main(Star):
                     f"## 用户绘图请求\n{original_prompt}\n\n"
                     f"## 角色人设\n{persona_profile[:500] if persona_profile else '未配置'}\n\n"
                     f"## 今日穿搭\n{outfit if outfit else '未指定'}\n\n"
+                    f"## 当前时段活动\n{current_schedule if current_schedule else '无'}\n\n"
                     f"## 天气情况\n{weather_desc if weather_desc else '未知'}\n\n"
                     f"## 当前时间\n{time_desc}\n\n"
                     f"## 情绪状态\n{emotion_desc if emotion_desc else '未知'}\n\n"
@@ -2929,9 +3200,10 @@ class Main(Star):
                     f"3. 确保人物形象与人设一致\n"
                     f"4. 穿搭信息要与今日穿搭匹配\n"
                     f"5. 场景氛围要与天气和时间一致\n"
-                    f"6. 严格遵守所有禁止规则\n"
-                    f"7. 避免与历史绘画重复\n"
-                    f"8. 只输出提示词本身，不要有任何解释或前缀\n\n"
+                    f"6. 结合当前时段活动描述场景\n"
+                    f"7. 严格遵守所有禁止规则\n"
+                    f"8. 避免与历史绘画重复\n"
+                    f"9. 只输出提示词本身，不要有任何解释或前缀\n\n"
                     f"英文提示词："
                 )
 

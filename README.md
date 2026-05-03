@@ -542,6 +542,12 @@ pip install -r requirements.txt
   - **修复主动消息发送失败**：修复会话ID格式错误（"not enough values to unpack"），使用完整的 `unified_msg_origin` 格式（platform_id:message_type:session_id）
   - **修复QQ空间ctx未初始化**：在创建Qzone对象后立即调用 `qzone.ready()` 完成登录，解决"operator.qzone.ctx 未初始化"问题
   - **新增主动消息目标白名单**：添加 `proactive_target_sessions` 配置项，支持指定接收主动消息的会话ID列表
+- v1.14.0: 优化绘图系统、人生故事预览和新闻获取
+  - **人生故事预览优化**：新增 `/life_story` 命令，以结构化格式查看人生故事详情，配置页仅显示摘要
+  - **绘图配置外置**：OpenAI和阿里云绘图模型名称从代码硬编码改为读取配置文件（`openai_model`、`aliyun_model`）
+  - **绘画提示词优化**：修复天气数据原始格式问题（如 `zhenxiong: 🌦 +7°C`），新增天气解析器自动转换为可读描述；改进穿搭提取逻辑，准确识别日程中的穿着描述
+  - **日程时间段过滤**：绘画时仅传递当前时段的日程信息给LLM，不再传递全天日程
+  - **新闻获取模块修复**：修复百度新闻API（改用百度热搜）、必应新闻（改用国内地址）、替换newsapi.org（改用搜狗新闻）；移除新闻获取对生活模拟的依赖限制
 
 
 ## 致谢

@@ -102,7 +102,7 @@ class NewsGetter:
         return None
 
     async def _fetch_from_baidu_news(self, topics: list[str]) -> dict | None:
-        """从百度新闻API获取数据
+        """从百度热搜获取数据
 
         Args:
             topics: 新闻主题列表
@@ -111,34 +111,52 @@ class NewsGetter:
             新闻数据字典或None
         """
         try:
-            # 使用主题进行搜索
-            topic_query = topics[0] if topics else "新闻"
-            url = f"https://news.baidu.com/api/getopennewslistpage?topicid=&topic={topic_query}&pagesize=5&ctype=json"
+            url = "https://top.baidu.com/board?tab=realtime"
 
             async with aiohttp.ClientSession() as session:
                 timeout = aiohttp.ClientTimeout(total=10)
-                async with session.get(url, timeout=timeout) as resp:
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                }
+                async with session.get(url, timeout=timeout, headers=headers) as resp:
                     if resp.status == 200:
-                        data = await resp.json()
-                        # 解析百度新闻数据
+                        text = await resp.text()
+                        import re
+
+                        # Extract hot search titles from the page
+                        titles = re.findall(
+                            r'class="c-single-text-ellipsis"[^>]*>([^<]+)<', text
+                        )
+                        if not titles:
+                            titles = re.findall(
+                                r'<div[^>]*title="([^"]+)"[^>]*class="[^"]*title[^"]*"',
+                                text,
+                            )
+                        if not titles:
+                            # Fallback pattern for baidu hot search
+                            titles = re.findall(
+                                r'content_[^"]*"[^>]*>([^<]{4,60})<', text
+                            )
+
                         news_list = []
-                        if "data" in data and "list" in data["data"]:
-                            for item in data["data"]["list"][:3]:  # 取前3条
+                        for title in titles[:5]:
+                            title = title.strip()
+                            if title and len(title) > 3 and "百度" not in title:
                                 news_list.append(
                                     {
-                                        "title": item.get("title", ""),
-                                        "summary": item.get("source", ""),
+                                        "title": title,
+                                        "summary": "来自百度热搜",
                                     }
                                 )
 
                         if news_list:
                             return {
                                 "date": datetime.now().strftime("%Y-%m-%d"),
-                                "news": news_list,
-                                "source": "百度新闻",
+                                "news": news_list[:3],
+                                "source": "百度热搜",
                             }
         except Exception as e:
-            logger.debug(f"[新闻获取器] 百度新闻API错误: {e}")
+            logger.debug(f"[新闻获取器] 百度热搜API错误: {e}")
 
         return None
 
@@ -153,11 +171,14 @@ class NewsGetter:
         """
         try:
             topic_query = " ".join(topics[:2])  # 使用前2个主题
-            url = f"https://news.bing.com/search?q={topic_query}&format=rss"
+            url = f"https://cn.bing.com/news/search?q={topic_query}&format=rss"
 
             async with aiohttp.ClientSession() as session:
                 timeout = aiohttp.ClientTimeout(total=10)
-                async with session.get(url, timeout=timeout) as resp:
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                }
+                async with session.get(url, timeout=timeout, headers=headers) as resp:
                     if resp.status == 200:
                         text = await resp.text()
                         # 简单的RSS解析
@@ -187,7 +208,7 @@ class NewsGetter:
         return None
 
     async def _fetch_from_generic_api(self, topics: list[str]) -> dict | None:
-        """从通用新闻API获取数据 (如果可用)
+        """从搜狗新闻获取数据
 
         Args:
             topics: 新闻主题列表
@@ -196,27 +217,37 @@ class NewsGetter:
             新闻数据字典或None
         """
         try:
-            # 这里可以配置为其他可用的新闻API
-            # 例如 newsapi.org, newsdata.io 等 (需要API密钥)
-            topic_query = topics[0] if topics else "technology"
+            topic_query = topics[0] if topics else "今日新闻"
 
-            # 示例：使用公开的新闻源
-            url = f"https://newsapi.org/v2/everything?q={topic_query}&pageSize=3&language=zh"
+            url = f"https://news.sogou.com/news?query={topic_query}&sort=1"
 
-            # 注意：newsapi.org 需要 API key，这里仅作示例
             async with aiohttp.ClientSession() as session:
                 timeout = aiohttp.ClientTimeout(total=10)
-                async with session.get(url, timeout=timeout) as resp:
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                }
+                async with session.get(url, timeout=timeout, headers=headers) as resp:
                     if resp.status == 200:
-                        data = await resp.json()
-                        news_list = []
+                        text = await resp.text()
+                        import re
 
-                        if "articles" in data:
-                            for article in data["articles"][:3]:
+                        # Extract news titles from sogou
+                        titles = re.findall(
+                            r"<h3[^>]*>.*?<a[^>]*>([^<]+)</a>", text, re.DOTALL
+                        )
+                        if not titles:
+                            titles = re.findall(
+                                r'class="[^"]*title[^"]*"[^>]*>([^<]{6,80})<', text
+                            )
+
+                        news_list = []
+                        for title in titles[:3]:
+                            title = title.strip()
+                            if title and len(title) > 5:
                                 news_list.append(
                                     {
-                                        "title": article.get("title", ""),
-                                        "summary": article.get("description", "")[:100],
+                                        "title": title,
+                                        "summary": "来自搜狗新闻",
                                     }
                                 )
 
@@ -224,10 +255,10 @@ class NewsGetter:
                             return {
                                 "date": datetime.now().strftime("%Y-%m-%d"),
                                 "news": news_list,
-                                "source": "通用新闻API",
+                                "source": "搜狗新闻",
                             }
         except Exception as e:
-            logger.debug(f"[新闻获取器] 通用API错误: {e}")
+            logger.debug(f"[新闻获取器] 搜狗新闻API错误: {e}")
 
         return None
 
