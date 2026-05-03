@@ -246,11 +246,11 @@ class Main(Star):
         self.enable_qzone = config.get("enable_qzone", False)
         self.publish_cron = config.get("publish_cron", "")
         self.publish_times_per_day = config.get(
-            "publish_times_per_day", 1
+            "publish_times_per_day", 3
         )  # 每天发说说次数
         self.publish_time_ranges = config.get(
-            "publish_time_ranges", ["9-12", "14-18", "19-22"]
-        )  # 发说说时间段
+            "publish_time_ranges", []
+        )  # 留空时根据publish_times_per_day自动生成时间段
         self.insomnia_probability = config.get(
             "insomnia_probability", 0.2
         )  # 失眠发说说概率

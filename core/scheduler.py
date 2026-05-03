@@ -32,17 +32,25 @@ class AutoPublish:
         self.scheduler = AsyncIOScheduler(timezone=self.timezone)
 
         # 获取配置
-        self.publish_times_per_day = config.get("publish_times_per_day", 1)
+        self.publish_times_per_day = config.get("publish_times_per_day", 3)
         self.publish_time_ranges = config.get("publish_time_ranges", [])
         self.insomnia_probability = config.get("insomnia_probability", 0.2)
 
-        # 如果未指定时间段或为空，根据发说说次数自动生成时间段
-        if not self.publish_time_ranges:
+        # 如果未指定时间段或为空，或者时间段数量与发说说次数不匹配，自动重新生成
+        if (
+            not self.publish_time_ranges
+            or len(self.publish_time_ranges) != self.publish_times_per_day
+        ):
+            reason = (
+                "时间段为空"
+                if not self.publish_time_ranges
+                else f"时间段数量({len(self.publish_time_ranges)})与发说说次数({self.publish_times_per_day})不匹配"
+            )
             self.publish_time_ranges = self._auto_generate_time_ranges(
                 self.publish_times_per_day
             )
             logger.info(
-                f"[自动发说说] 根据每天{self.publish_times_per_day}次自动生成时间段: {self.publish_time_ranges}"
+                f"[自动发说说] {reason}，自动重新分配时间段: {self.publish_time_ranges}"
             )
 
         # 记录今日发布次数
