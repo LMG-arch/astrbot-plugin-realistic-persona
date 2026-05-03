@@ -2,9 +2,9 @@
 拟人化角色行为系统插件 (Realistic Persona Plugin)
 整合了情绪感知、生活模拟、QQ空间日记、AI配图等功能
 
-版本: v1.8.0
+版本: v1.12.0
 作者: custom
-最后更新: 2025-01-01
+最后更新: 2026-05-03
 符合AstrBot插件开发完全指南规范
 """
 
@@ -146,7 +146,7 @@ class Main(Star):
         self.api_key = config.get("api_key")
         self.model = config.get("model", "iic/sdxl-turbo")
         self.size = config.get("size", "1080x1920")
-        self.api_url = config.get("api_url", "https://api.modelscope.com/api/")
+        self.api_url = config.get("api_url", "https://api-inference.modelscope.cn/")
         self.provider = config.get("provider", "ms")
 
         # ========== 图像生成检测配置 ==========
@@ -1422,39 +1422,28 @@ class Main(Star):
         try:
             logger.info(f"[主动消息] 准备发送到会话 {session_id}: {message[:50]}...")
 
-            # 从上下文数据中获取必要信息
-            user_id = context_data.get(
-                "user_id", session_id
-            )  # 如果没有user_id，使用session_id
-            platform = context_data.get("platform", "unknown")
-
-            if not user_id:
-                logger.warning("[主动消息] 缺少user_id，无法发送")
+            if not session_id:
+                logger.warning("[主动消息] 缺少session_id，无法发送")
                 return
 
-            logger.info(
-                f"[主动消息] 触发 - 会话: {session_id}, 用户: {user_id}, 平台: {platform}"
-            )
+            logger.info(f"[主动消息] 触发 - 会话: {session_id}")
             logger.info(f"[主动消息] 内容: {message}")
 
-            # 尝试通过平台适配器发送消息
-            try:
-                # 获取平台适配器
-                adapter = self.context.platform_adapter
-                if adapter and hasattr(adapter, "send_message"):
-                    # 发送消息到指定用户
-                    await adapter.send_message(
-                        target_id=user_id,
-                        message=message,
-                        message_type="private",  # 私聊
-                    )
-                    logger.info(f"[主动消息] 已发送到用户 {user_id}")
-                    return
-                else:
-                    logger.warning("[主动消息] 平台适配器不可用或不支持发送消息")
+            # 通过 AstrBot Context.send_message 发送消息
+            from astrbot.api.message_components import Plain
+            from astrbot.core.message.message_event_result import MessageChain
 
+            chain = MessageChain([Plain(message)])
+            try:
+                sent = await self.context.send_message(session_id, chain)
+                if sent:
+                    logger.info(f"[主动消息] 已发送到会话 {session_id}")
+                else:
+                    logger.warning(
+                        f"[主动消息] 未找到匹配平台，消息未发送: {session_id}"
+                    )
             except Exception as e:
-                logger.debug(f"[主动消息] 通过适配器发送失败: {e}")
+                logger.warning(f"[主动消息] 发送失败: {e}")
                 logger.warning(f"[主动消息] 消息已生成但未能发送: {message[:50]}...")
 
         except Exception as e:
@@ -1470,30 +1459,81 @@ class Main(Star):
             问候消息字符串
         """
         try:
-            # 如果有会话ID，尝试获取历史对话上下文
-            context_info = ""
+            # 收集各种上下文信息
+            context_parts = []
+            now = datetime.now()
+
+            # 1. 最近对话历史
             if session_id:
-                # 尝试获取最近的对话历史
                 try:
-                    # 获取最近的对话历史（使用AstrBot的对话管理功能）
                     conversation_history = await self._get_recent_conversation_context(
                         session_id
                     )
                     if conversation_history:
-                        context_info = f"\n[最近对话回顾：{' '.join(conversation_history[:3])}]"  # 只取前3条
+                        context_parts.append(
+                            f"[最近对话回顾：{' '.join(conversation_history[:3])}]"
+                        )
                 except Exception as e:
                     logger.debug(f"获取对话历史失败: {e}")
+
+            # 2. 日程信息
+            try:
+                schedule_info = await self._maybe_generate_schedule(now)
+                if schedule_info:
+                    context_parts.append(f"[今日日程：{schedule_info[:200]}]")
+            except Exception as e:
+                logger.debug(f"获取日程失败: {e}")
+
+            # 3. 天气信息
+            try:
+                if hasattr(self, "_weather_cache") and self._weather_cache:
+                    weather_info = self._weather_cache.get("weather")
+                    if weather_info:
+                        context_parts.append(f"[当前天气：{weather_info}]")
+            except Exception as e:
+                logger.debug(f"获取天气失败: {e}")
+
+            # 4. 新闻信息
+            try:
+                if hasattr(self, "_news_cache") and self._news_cache:
+                    news_info = self._news_cache.get("news")
+                    if news_info:
+                        context_parts.append(f"[今日新闻：{news_info[:150]}]")
+            except Exception as e:
+                logger.debug(f"获取新闻失败: {e}")
+
+            # 5. 记忆/经历信息
+            try:
+                if self.experience_bank and session_id:
+                    recent_exp = self.experience_bank.get_recent_conversations(
+                        session_id, limit=3
+                    )
+                    if recent_exp:
+                        exp_texts = [
+                            c.get("bot_response", "")
+                            for c in recent_exp
+                            if c.get("bot_response")
+                        ]
+                        if exp_texts:
+                            context_parts.append(
+                                f"[最近互动：{'；'.join(exp_texts[:2])}]"
+                            )
+            except Exception as e:
+                logger.debug(f"获取经历信息失败: {e}")
+
+            context_info = "\n".join(context_parts) if context_parts else ""
 
             # 构建生成问候的提示词
             persona_profile = await self._get_persona_profile()
             greeting_prompt = (
                 f"你是{self.persona_name}，{persona_profile}。\n"
-                f"现在是{datetime.now().strftime('%Y年%m月%d日 %H:%M')}。\n"
-                f"你注意到用户很久没来聊天了，想主动联系一下。{context_info}\n\n"
+                f"现在是{now.strftime('%Y年%m月%d日 %H:%M')}。\n"
+                f"你注意到用户很久没来聊天了，想主动联系一下。\n"
+                f"{context_info}\n\n"
                 "请生成一条自然、亲切、符合你人设的主动问候消息，不要超过15个字。\n"
                 "要求：\n"
                 "1. 语气自然，像真人一样聊天\n"
-                "2. 可以提及之前的对话内容（如果有）\n"
+                "2. 可以结合当前时间、天气、日程或之前的对话内容\n"
                 "3. 表达关心或好奇，邀请用户聊天\n"
                 "4. 不要使用过于正式的语言\n"
                 "5. 不要提及你是AI或机器人\n\n"
@@ -1928,11 +1968,11 @@ class Main(Star):
 
         current_seed = random.randint(1, 2147483647)
         payload = {
-            "model": f"{self.model}",
+            "model": self.model,
             "prompt": prompt,
             "seed": current_seed,
             "size": size,
-            "num_inference_steps": "30",
+            "steps": 30,
         }
 
         async with session.post(
@@ -2362,8 +2402,17 @@ class Main(Star):
     @filter.command("发说说")
     async def publish_feed(self, event: AiocqhttpMessageEvent):
         """发说说 <内容> <图片>, 由用户指定内容"""
-        if not self.enable_qzone or not QZONE_AVAILABLE:
-            await event.send(event.plain_result("QQ空间功能未启用"))
+        if not self.enable_qzone:
+            await event.send(
+                event.plain_result("QQ空间功能未启用，请在配置中开启 enable_qzone")
+            )
+            return
+        if not QZONE_AVAILABLE:
+            await event.send(
+                event.plain_result(
+                    "QQ空间模块加载失败，请检查 aiocqhttp/apscheduler 等依赖是否安装"
+                )
+            )
             return
 
         # 检查模块是否初始化完成
@@ -2385,8 +2434,17 @@ class Main(Star):
     @filter.command("写说说", alias={"写稿", "写草稿"})
     async def write_draft(self, event: AiocqhttpMessageEvent, topic: str | None = None):
         """写说说 <主题> <图片>, 由AI生成说说内容并自动配图"""
-        if not self.enable_qzone or not QZONE_AVAILABLE:
-            await event.send(event.plain_result("QQ空间功能未启用"))
+        if not self.enable_qzone:
+            await event.send(
+                event.plain_result("QQ空间功能未启用，请在配置中开启 enable_qzone")
+            )
+            return
+        if not QZONE_AVAILABLE:
+            await event.send(
+                event.plain_result(
+                    "QQ空间模块加载失败，请检查 aiocqhttp/apscheduler 等依赖是否安装"
+                )
+            )
             return
 
         # 检查模块是否初始化完成

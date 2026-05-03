@@ -476,6 +476,7 @@ pip install -r requirements.txt
   - **后台更新**：默认3天更新一次，异步执行不影响当前对话
   - **自动注入**：每次LLM请求时自动将精简上下文注入system_prompt
   - **设计理念**：优先保证扑演质量，其次优化Token，根据实际经历构建故事而非用户习惯
+- v1.10.0: 版本号跳过，内部重构整合（未正式发布）
 - v1.11.0: 新增图像生成检测功能 - 自动检测并调用绘图工具
   - **图像生成检测**：自动检测LLM返回的绘画提示词但没有实际调用绘图工具的情况
   - **自动调用**：当检测到这种情况时，系统会自动调用绘图工具生成图片
@@ -488,11 +489,17 @@ pip install -r requirements.txt
   - **优化绘画提示词**：生成绘画提示词时根据当前时间选择当天日程，并结合天气情况等生成提示词
   - **多时间匹配**：根据当前时间段匹配日程活动，生成符合场景的图片
 
-- v1.12.0: 代码质量修复与废弃代码清理
+- v1.12.0: 代码质量修复、功能增强与废弃代码清理
   - **修复pillowmd样式崩溃**：未安装pillowmd时`self.style`未初始化导致QQ空间功能崩溃
   - **清理废弃代码**：删除已废弃的`profile_manager.py`（被`auto_profile_updater.py`替代）和`campus_wall.py`（v1.0.0起已移除功能）
   - **修复乱码**：修复`experience_bank.py`和`_conf_schema.json`中的繁体/乱码字符
   - **全面代码审计**：对照文档审计所有功能模块完整性，确认10大功能模块均可正常使用
+  - **修复主动消息上下文缺失**：主动问候消息现在会结合日程、天气、新闻、记忆等上下文信息生成
+  - **修复主动消息发送失败**：使用正确的`Context.send_message()`API替代不存在的`platform_adapter.send_message()`
+  - **修复ModelScope API调用400错误**：修正API参数名（`steps`而非`num_inference_steps`）和类型（int而非string）
+  - **修复api_url默认值不一致**：统一为`https://api-inference.modelscope.cn/`，与配置文件schema和ModelScope官方文档一致
+  - **修复版本标识过时**：更新main.py头部版本注释为v1.12.0
+  - **优化QQ空间功能错误提示**：区分配置未启用和依赖未安装两种错误，给出更明确的提示信息
 
 
 
@@ -501,3 +508,4 @@ pip install -r requirements.txt
 本插件整合了以下插件的功能：
 - astrbot_plugin_ms_aiimg (竹和木)
 - astrbot_plugin_qzone
+
