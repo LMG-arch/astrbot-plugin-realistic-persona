@@ -2347,9 +2347,16 @@ class Main(Star):
                 logger.debug(f"[绘图工具] 检测到情绪: {emotion.value}")
 
             # Use LLM to generate context-aware drawing prompt
-            logger.info("[绘图工具] 开始根据上下文生成绘图提示词...")
+            logger.info("[绘图工具] 开始根据上下文生成绘图提示词（LLM增强模式）...")
             enhanced_prompt = await self._enhance_drawing_prompt(prompt, event=event)
-            logger.info(f"[绘图工具] 生成的提示词: {enhanced_prompt[:150]}...")
+            if enhanced_prompt and enhanced_prompt != prompt:
+                logger.info(
+                    f"[绘图工具] ✅ 已使用LLM生成上下文感知提示词: {enhanced_prompt[:150]}..."
+                )
+            else:
+                logger.info(
+                    f"[绘图工具] ℹ️ 使用原始提示词（未经过LLM增强）: {enhanced_prompt[:150]}..."
+                )
 
             # Request image with enhanced prompt
             logger.info("[绘图工具] 开始请求图片生成...")
@@ -2779,6 +2786,9 @@ class Main(Star):
 
             provider_id = self._get_provider_id()
             if provider_id and self.context and hasattr(self.context, "llm_generate"):
+                logger.info(
+                    "[绘图提示词生成] ✅ LLM可用，使用LLM生成上下文感知提示词..."
+                )
                 meta_prompt = (
                     f"你是一个专业的AI绘图提示词生成器。根据以下上下文信息，将用户的绘图请求转化为一段详细的、"
                     f"适合AI图片生成模型的英文提示词。\n\n"
@@ -2820,7 +2830,9 @@ class Main(Star):
                         ):
                             if generated.startswith(prefix):
                                 generated = generated[len(prefix) :].strip()
-                        logger.info(f"[绘图提示词生成] LLM生成: {generated[:100]}...")
+                        logger.info(
+                            f"[绘图提示词生成] ✅ LLM成功生成提示词: {generated[:100]}..."
+                        )
                         # Save
                         try:
                             self.local_data_manager.save_drawing_prompt(
@@ -2829,10 +2841,15 @@ class Main(Star):
                         except Exception as e:
                             logger.debug(f"[绘图提示词生成] 保存失败: {e}")
                         return generated
+                    else:
+                        logger.warning("[绘图提示词生成] LLM返回空结果，回退到拼接方式")
                 except Exception as e:
                     logger.warning(f"[绘图提示词生成] LLM生成失败，回退到拼接方式: {e}")
 
             # ============ 3. 回退：关键词拼接方式 ============
+            logger.info(
+                "[绘图提示词生成] ⚠️ LLM不可用或未配置provider，使用关键词拼接方式生成提示词"
+            )
             return self._build_drawing_prompt_fallback(
                 original_prompt,
                 persona_profile=persona_profile,
