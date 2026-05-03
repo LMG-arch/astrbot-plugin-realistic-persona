@@ -784,6 +784,63 @@ class LLMAction:
             life_header.append(
                 "请结合今天的日程安排和对话历史，生成相关的感慨或事件，不要直接复制对话内容，而是根据对话历史和日程安排生成相关的感受或经历。"
             )
+
+        # 注入经历银行上下文：最近活动、成长轨迹
+        if hasattr(self, "experience_bank") and self.experience_bank:
+            try:
+                growth = self.experience_bank.get_growth_summary()
+                if growth:
+                    skills = growth.get("skills", {})
+                    if skills:
+                        skill_list = []
+                        for name, info in skills.items():
+                            if isinstance(info, dict):
+                                skill_list.append(f"{name}(Lv.{info.get('level', 1)})")
+                            else:
+                                skill_list.append(f"{name}(Lv.{info})")
+                        life_header.append(f"你的技能：{', '.join(skill_list[:8])}")
+
+                    interests = growth.get("interests", [])
+                    if interests:
+                        interest_names = [
+                            i.get("item", str(i)) if isinstance(i, dict) else str(i)
+                            for i in interests[:6]
+                        ]
+                        life_header.append(f"你的兴趣：{', '.join(interest_names)}")
+
+                recent_convs = self.experience_bank.get_recent_conversations(limit=3)
+                if recent_convs:
+                    recent_topics = []
+                    for conv in recent_convs:
+                        msg = conv.get("user_message", "")
+                        if msg:
+                            recent_topics.append(msg[:40])
+                    if recent_topics:
+                        life_header.append(
+                            f"最近的聊天话题：{'、'.join(recent_topics)}"
+                        )
+            except Exception as e:
+                logger.debug(f"[日记生成] 获取经历银行上下文失败: {e}")
+
+        # 注入人格演化上下文
+        if hasattr(self, "personality_evolution") and self.personality_evolution:
+            try:
+                summary = self.personality_evolution.get_personality_summary()
+                if summary:
+                    phase = summary.get("current_phase", "stable")
+                    phase_name = "稳定期" if phase == "stable" else "变化期"
+                    expr = summary.get("expression_levels", {})
+                    vocab = expr.get("vocabulary", 5)
+                    humor = expr.get("humor", 5)
+                    habits = summary.get("core_habits", [])
+                    life_header.append(
+                        f"你的表达风格（{phase_name}）：词汇水平{vocab}/10，幽默感{humor}/10"
+                    )
+                    if habits:
+                        life_header.append(f"你的核心习惯：{', '.join(habits[:3])}")
+            except Exception as e:
+                logger.debug(f"[日记生成] 获取人格演化上下文失败: {e}")
+
         life_header_text = "\n".join(life_header) + "\n\n"
 
         # 系统提示，要求使用三对双引号包裹正文

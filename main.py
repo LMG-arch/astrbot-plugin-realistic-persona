@@ -682,6 +682,9 @@ class Main(Star):
         # llm内容生成器
         logger.info("[QQ空间] 创建LLMAction对象...")
         self.llm = LLMAction(self.context, self.config, client)  # type: ignore[arg-type]
+        # 注入经历银行和人格演化引用，用于生成日记时获取上下文
+        self.llm.experience_bank = self.experience_bank
+        self.llm.personality_evolution = self.personality_evolution
         logger.info("[QQ空间] LLMAction对象创建完成")
 
         # 输出配置信息
@@ -1130,6 +1133,36 @@ class Main(Star):
                 logger.error(f"生活模拟上下文构建失败: {e}")
                 # 即使生活模拟失败，也要确保不影响LLM请求
                 pass
+
+        # 人格演化：注入表达风格上下文（每10次对话注入一次，避免过度token消耗）
+        if (
+            self.enable_async_thinking
+            and self.personality_evolution
+            and abs(hash(event.get_session_id())) % 10 == 0
+        ):
+            try:
+                summary = self.personality_evolution.get_personality_summary()
+                if summary:
+                    phase = summary.get("current_phase", "stable")
+                    phase_name = "稳定期" if phase == "stable" else "变化期"
+                    expr = summary.get("expression_levels", {})
+                    vocab = expr.get("vocabulary", 5)
+                    humor = expr.get("humor", 5)
+                    complexity = expr.get("complexity", 5)
+                    habits = summary.get("core_habits", [])
+                    personality_hint = (
+                        f"\n[表达风格提示 - {phase_name}] "
+                        f"词汇水平{vocab}/10，幽默感{humor}/10，句式复杂度{complexity}/10"
+                    )
+                    if habits:
+                        personality_hint += f"。核心习惯：{', '.join(habits[:3])}"
+                    if hasattr(request, "system_prompt"):
+                        if request.system_prompt:
+                            request.system_prompt += personality_hint
+                        else:
+                            request.system_prompt = personality_hint
+            except Exception as e:
+                logger.debug(f"注入人格演化上下文失败: {e}")
 
         # 记录用户交互到经历银行（异步思考系统）
         if (
@@ -2853,6 +2886,81 @@ class Main(Star):
         except Exception as e:
             yield event.plain_result(f"获取人格状态失败: {str(e)}")
 
+    @filter.command("experience_status")
+    async def check_experience_status(self, event: AstrMessageEvent):
+        """查看经历银行状态"""
+        if not self.enable_async_thinking or not self.experience_bank:
+            yield event.plain_result("经历银行未启用（需启用异步思考系统）")
+            return
+
+        try:
+            parts = ["🏦 经历银行状态\n"]
+
+            # Growth summary
+            growth_summary = self.experience_bank.get_growth_summary()
+            if growth_summary:
+                # Skills
+                skills = growth_summary.get("skills", {})
+                if skills:
+                    skill_lines = []
+                    for name, info in skills.items():
+                        if isinstance(info, dict):
+                            level = info.get("level", 1)
+                            skill_lines.append(f"  • {name}: Lv.{level}")
+                        else:
+                            skill_lines.append(f"  • {name}: Lv.{info}")
+                    parts.append("💪 技能:")
+                    parts.extend(skill_lines[:10])
+
+                # Interests
+                interests = growth_summary.get("interests", [])
+                if interests:
+                    interest_names = [
+                        i.get("item", str(i)) if isinstance(i, dict) else str(i)
+                        for i in interests[:8]
+                    ]
+                    parts.append(f"🎯 兴趣: {', '.join(interest_names)}")
+
+                # Views
+                views = growth_summary.get("views", [])
+                if views:
+                    view_names = [
+                        v.get("view", str(v)) if isinstance(v, dict) else str(v)
+                        for v in views[:5]
+                    ]
+                    parts.append(f"💭 观点: {', '.join(view_names)}")
+
+            # Conversation count
+            conv_file = self.experience_bank.conversations_file
+            if conv_file.exists():
+                line_count = sum(
+                    1 for line in open(conv_file, encoding="utf-8") if line.strip()
+                )
+                parts.append(f"\n📝 对话记录数: {line_count}")
+
+            # Event count
+            evt_file = self.experience_bank.events_file
+            if evt_file.exists():
+                evt_count = sum(
+                    1 for line in open(evt_file, encoding="utf-8") if line.strip()
+                )
+                parts.append(f"📋 事件记录数: {evt_count}")
+
+            # Relationships
+            rel_file = self.experience_bank.relationships_file
+            if rel_file.exists():
+                with open(rel_file, encoding="utf-8") as f:
+                    rels = json.load(f)
+                if rels:
+                    parts.append(f"👥 记住的用户数: {len(rels)}")
+                    for uid, rel in list(rels.items())[:5]:
+                        count = rel.get("interaction_count", 0)
+                        parts.append(f"  • 用户 {uid}: {count} 次互动")
+
+            yield event.plain_result("\n".join(parts))
+        except Exception as e:
+            yield event.plain_result(f"获取经历银行状态失败: {str(e)}")
+
     # ========== QQ空间相关命令（仅在启用时可用）==========
 
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -2944,43 +3052,34 @@ class Main(Star):
         # 获取用户上传的图片
         images = await get_image_urls(event)
 
-        # 如果没有图片，自动生成配图
+        # 如果没有图片，自动生成配图（使用多平台 fallback）
         if not images:
             logger.info("[写说说] 没有上传图片，尝试自动生成配图...")
-            # 检查是否配置了ModelScope API
-            if not self.llm.ms_api_key:
-                logger.warning(
-                    "[写说说] 未配置 ms_api_key，跳过自动配图，将发布纯文本说说"
-                )
-                logger.info("提示：如需自动配图，请在插件配置中设置 ms_api_key")
-            else:
-                try:
-                    # 获取配置的user_id和group_id
-                    user_id = self.config.get("diary_user_id", "")
-                    group_id = event.get_group_id() or ""
-                    logger.info(
-                        f"[写说说] 配置的user_id: {user_id}, group_id: {group_id}"
-                    )
+            try:
+                # 获取配置的user_id和group_id
+                user_id = self.config.get("diary_user_id", "")
+                group_id = event.get_group_id() or ""
+                logger.info(f"[写说说] 配置的user_id: {user_id}, group_id: {group_id}")
 
-                    # 生成图片提示词，传入user_id和group_id
-                    image_prompt = await self.llm.generate_image_prompt_from_diary(
-                        text, group_id=group_id, user_id=user_id
+                # 生成图片提示词，传入user_id和group_id
+                image_prompt = await self.llm.generate_image_prompt_from_diary(
+                    text, group_id=group_id, user_id=user_id
+                )
+                if image_prompt:
+                    logger.info(f"[写说说] 生成的配图提示词: {image_prompt}")
+                    # 使用多平台 fallback 生图（ModelScope/OpenAI/阿里云）
+                    image_url = await self.llm._request_image_with_fallback(
+                        image_prompt
                     )
-                    if image_prompt:
-                        logger.info(f"[写说说] 生成的配图提示词: {image_prompt}")
-                        # 调用ModelScope生图
-                        image_url = await self.llm._request_modelscope(image_prompt)
-                        if image_url:
-                            images = [image_url]
-                            logger.info(f"[写说说] 配图生成成功: {image_url}")
-                        else:
-                            logger.warning(
-                                "[写说说] 配图生成失败，ModelScope未返回图片URL"
-                            )
+                    if image_url:
+                        images = [image_url]
+                        logger.info(f"[写说说] 配图生成成功: {image_url}")
                     else:
-                        logger.warning("[写说说] 无法生成图片提示词")
-                except Exception as e:
-                    logger.error(f"[写说说] 自动配图失败: {e}", exc_info=True)
+                        logger.warning("[写说说] 配图生成失败，所有平台均未返回图片URL")
+                else:
+                    logger.warning("[写说说] 无法生成图片提示词")
+            except Exception as e:
+                logger.error(f"[写说说] 自动配图失败: {e}", exc_info=True)
         else:
             logger.info(f"[写说说] 使用用户上传的图片: {len(images)}张")
 
@@ -3406,6 +3505,14 @@ class Main(Star):
         text = resp.completion_text or ""
         if not text:
             return resp
+
+        # 记录AI回复到经历银行（补全之前的空bot_response）
+        if self.enable_async_thinking and self.experience_bank:
+            try:
+                session_id = event.get_session_id()
+                self.experience_bank.update_last_bot_response(session_id, text[:500])
+            except Exception as e:
+                logger.debug(f"[经历银行] 记录AI回复失败: {e}")
 
         # 检测是否包含工具调用
         tool_call = self.parse_tool_call(text)
