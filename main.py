@@ -380,10 +380,49 @@ class Main(Star):
         )
         self.cache.mkdir(parents=True, exist_ok=True)
 
+    @staticmethod
+    def _patch_toolset_openai_schema():
+        """Monkey-patch ToolSet.openai_schema to always include description.
+
+        Fixes AstrBot core bug where empty-string description causes OpenAI API
+        400 BadRequestError (ToolDescription description=None) when tool re-query
+        is performed after tool execution.
+        """
+        from astrbot.core.agent.tool import ToolSet
+
+        _original = ToolSet.openai_schema
+
+        def _fixed_openai_schema(self, omit_empty_parameter_field=False):
+            result = []
+            for tool in self.tools:
+                func_def = {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description or tool.name,
+                    },
+                }
+                if tool.parameters is not None:
+                    if (
+                        tool.parameters and tool.parameters.get("properties")
+                    ) or not omit_empty_parameter_field:
+                        func_def["function"]["parameters"] = tool.parameters
+                result.append(func_def)
+            return result
+
+        ToolSet.openai_schema = _fixed_openai_schema
+        logger.info("[补丁] 已修复 ToolSet.openai_schema (description=None 400错误)")
+
     async def initialize(self):
         """插件激活时调用，用于初始化资源和启动服务"""
         try:
             logger.info("拟人化角色行为系统插件正在加载...")
+
+            # Monkey-patch AstrBot核心以修复400错误
+            try:
+                self._patch_toolset_openai_schema()
+            except Exception as e:
+                logger.warning(f"[补丁] ToolSet补丁应用失败: {e}")
 
             # 加载当天日程到配置显示
             try:
@@ -397,6 +436,67 @@ class Main(Star):
                     logger.info("已加载当天日程到配置显示")
             except Exception as e:
                 logger.debug(f"加载日程显示失败: {e}")
+
+            # 加载人生故事到配置显示
+            try:
+                story_dir = (
+                    StarTools.get_data_dir("astrbot_plugin_realistic_persona")
+                    / "life_story"
+                )
+                life_story_file = story_dir / "life_story.json"
+                context_cache_file = story_dir / "context_cache.json"
+                state_file = story_dir / "engine_state.json"
+
+                display_parts = []
+
+                if life_story_file.exists():
+                    with open(life_story_file, encoding="utf-8") as f:
+                        story = json.load(f)
+                    timeline = story.get("timeline", [])
+                    if timeline:
+                        display_parts.append("=== 人生经历线 ===")
+                        for ch in timeline:
+                            chapter = ch.get("chapter", "?")
+                            content = ch.get("content", "")
+                            time_str = ch.get("time", "")[:10]
+                            display_parts.append(
+                                f"\n[第{chapter}章] {time_str}\n{content[:300]}"
+                            )
+
+                if context_cache_file.exists():
+                    with open(context_cache_file, encoding="utf-8") as f:
+                        cache = json.load(f)
+                    compact = cache.get("compact_context", "")
+                    if compact:
+                        display_parts.append(f"\n\n=== 当前精简上下文 ===\n{compact}")
+
+                if state_file.exists():
+                    with open(state_file, encoding="utf-8") as f:
+                        state = json.load(f)
+                    ch_num = state.get("current_chapter", 0)
+                    update_count = state.get("update_count", 0)
+                    last_ts = state.get("last_update_time", 0)
+                    last_str = (
+                        datetime.fromtimestamp(last_ts).strftime("%Y-%m-%d %H:%M")
+                        if last_ts > 0
+                        else "未更新"
+                    )
+                    display_parts.append(
+                        f"\n\n=== 引擎状态 ===\n"
+                        f"当前章节: 第{ch_num}章\n"
+                        f"更新次数: {update_count}\n"
+                        f"上次更新: {last_str}"
+                    )
+
+                if display_parts:
+                    self.config["life_story_display"] = "\n".join(display_parts)
+                    logger.info("已加载人生故事到配置显示")
+                else:
+                    self.config["life_story_display"] = (
+                        "（人生故事尚未生成，请等待系统自动生成）"
+                    )
+            except Exception as e:
+                logger.debug(f"加载人生故事显示失败: {e}")
 
             # 启动异步思考循环
             if self.enable_async_thinking and self.async_thinking_scheduler:

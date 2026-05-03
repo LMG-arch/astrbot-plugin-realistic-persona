@@ -410,6 +410,14 @@
     "condition": {"enable_life_story": true},
     "hint": "LLM对话中注入的精简上下文最大字符数，范围100-500"
   },
+  "life_story_display": {
+    "description": "人生故事预览",
+    "type": "text",
+    "default": "（人生故事尚未生成，请等待系统自动生成）",
+    "readonly": true,
+    "condition": {"enable_life_story": true},
+    "hint": "展示已生成的人生经历线和精简上下文，此项为只读，仅供预览"
+  },
   "life_story_cache_days": {
     "description": "上下文缓存有效期(天)",
     "type": "int",
