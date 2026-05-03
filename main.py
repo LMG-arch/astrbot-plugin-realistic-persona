@@ -15,6 +15,7 @@ import random
 import re
 import time
 from datetime import datetime
+from pathlib import Path
 
 import aiohttp
 
@@ -368,11 +369,25 @@ class Main(Star):
 
     def _init_qzone_settings(self, config):
         """初始化QQ空间相关设置"""
-        # pillowmd样式目录
-        default_style_dir = (
-            StarTools.get_data_dir("astrbot_plugin_realistic_persona") / "default_style"
-        )
-        self.pillowmd_style_dir = config.get("pillowmd_style_dir") or default_style_dir
+        # pillowmd样式目录 - 优先使用配置值，否则查找插件源目录下的 default_style
+        configured_dir = config.get("pillowmd_style_dir")
+        if configured_dir:
+            self.pillowmd_style_dir = Path(configured_dir)
+        else:
+            # 尝试在插件源目录查找 default_style（StarTools.get_data_dir 指向 plugin_data，
+            # 但默认样式文件随插件源码一起分发，位于 data/plugins/xxx/default_style）
+            plugin_src_dir = Path(__file__).parent / "default_style"
+            data_dir = (
+                StarTools.get_data_dir("astrbot_plugin_realistic_persona")
+                / "default_style"
+            )
+            if plugin_src_dir.exists():
+                self.pillowmd_style_dir = plugin_src_dir
+            elif data_dir.exists():
+                self.pillowmd_style_dir = data_dir
+            else:
+                self.pillowmd_style_dir = plugin_src_dir  # fallback
+                logger.warning(f"pillowmd样式目录不存在: {plugin_src_dir}")
 
         # 缓存目录
         self.cache = (
@@ -2862,6 +2877,15 @@ class Main(Star):
             await event.send(event.plain_result("QQ空间模块初始化中，请稍后重试"))
             logger.warning(
                 f"[发说说] 命令被调用，但QQ空间模块尚未初始化完成 - operator={'MISSING' if not hasattr(self, 'operator') else 'OK'}, llm={'MISSING' if not hasattr(self, 'llm') else 'OK'}"
+            )
+            return
+
+        # 检查样式是否加载
+        if not self.style:
+            await event.send(
+                event.plain_result(
+                    "pillowmd样式未加载，无法生成说说图片。请检查 pillowmd 是否正确安装以及 default_style 目录是否存在"
+                )
             )
             return
 
