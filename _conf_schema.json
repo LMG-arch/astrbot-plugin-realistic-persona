@@ -134,7 +134,7 @@
     "type": "string",
     "default": "",
     "condition": {"enable_proactive_messages": true},
-    "hint": "指定接收主动消息的会话ID（格式：platform_id:message_type:session_id），多个用逗号分隔。留空则对所有会话生效"
+    "hint": "指定接收主动消息的会话ID（格式：platform_id:message_type:session_id），多个用逗号分隔。留空则对所有会话生效。可使用 /sessions 命令查看可用会话列表"
   },
   "enable_context_events": {
     "description": "启用上下文事件",
@@ -403,6 +403,27 @@
     "default": 0.6,
     "condition": {"enable_auto_profile_update": true},
     "hint": "触发更新的情绪强度阈值 (0-1)，越高越不容易触发"
+  },
+  "enable_profile_update_from_thinking": {
+    "description": "异步思考触发Profile更新",
+    "type": "bool",
+    "default": false,
+    "condition": {"enable_auto_profile_update": true},
+    "hint": "在异步思考循环中也可以触发个人资料更新，让角色的性格变化更加自然（不仅限于用户对话时）"
+  },
+  "profile_update_max_per_day": {
+    "description": "每天最大更新次数",
+    "type": "int",
+    "default": 3,
+    "condition": {"enable_auto_profile_update": true},
+    "hint": "限制每天最多更新个人资料的次数（含对话触发+思考触发），避免频繁修改"
+  },
+  "profile_update_max_per_week": {
+    "description": "每周最大更新次数",
+    "type": "int",
+    "default": 10,
+    "condition": {"enable_auto_profile_update": true},
+    "hint": "限制每周最多更新个人资料的次数，取0表示不限制"
   },
   
   "_section_life_story": {

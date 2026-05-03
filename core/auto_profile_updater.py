@@ -18,6 +18,7 @@ class AutoProfileUpdater:
 
     根据情绪强度和变化自动更新QQ资料
     支持昵称、签名、头像的智能更新
+    支持每日/每周更新次数限制
     """
 
     def __init__(
@@ -29,6 +30,8 @@ class AutoProfileUpdater:
         cooldown: int = 1800,  # 30分钟
         threshold: float = 0.6,  # 情绪强度阈值
         persona_name: str = "AI助手",
+        max_updates_per_day: int = 3,
+        max_updates_per_week: int = 10,
     ):
         """初始化自动Profile更新器
 
@@ -40,6 +43,8 @@ class AutoProfileUpdater:
             cooldown: 更新冷却时间（秒）
             threshold: 情绪变化阈值（0-1）
             persona_name: 角色名称
+            max_updates_per_day: 每天最大更新次数
+            max_updates_per_week: 每周最大更新次数（0表示不限制）
         """
         self.data_dir = data_dir
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -50,6 +55,8 @@ class AutoProfileUpdater:
         self.cooldown = cooldown
         self.threshold = threshold
         self.persona_name = persona_name
+        self.max_updates_per_day = max_updates_per_day
+        self.max_updates_per_week = max_updates_per_week
 
         # 状态文件
         self.state_file = self.data_dir / "profile_update_state.json"
@@ -83,6 +90,11 @@ class AutoProfileUpdater:
             "current_nickname": "",
             "current_signature": "",
             "emotion_history": [],
+            "daily_update_count": 0,
+            "daily_update_date": "",
+            "weekly_update_count": 0,
+            "weekly_update_week": "",
+            "update_history": [],
         }
 
     def _save_state(self):
@@ -94,6 +106,45 @@ class AutoProfileUpdater:
                 json.dump(self.state, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.error(f"[Profile更新器] 保存状态失败: {e}")
+
+    def _check_frequency_limit(self) -> bool:
+        """检查是否超过每日/每周更新频率限制
+
+        Returns:
+            是否允许更新（True=允许，False=超限）
+        """
+        now = datetime.now()
+        today_str = now.strftime("%Y-%m-%d")
+        week_str = now.strftime("%Y-W%W")
+
+        # 重置每日计数（如果日期变了）
+        if self.state.get("daily_update_date") != today_str:
+            self.state["daily_update_count"] = 0
+            self.state["daily_update_date"] = today_str
+
+        # 重置每周计数（如果周变了）
+        if self.state.get("weekly_update_week") != week_str:
+            self.state["weekly_update_count"] = 0
+            self.state["weekly_update_week"] = week_str
+
+        # 检查每日限制
+        if self.state["daily_update_count"] >= self.max_updates_per_day:
+            logger.debug(
+                f"[Profile更新器] 今日已更新{self.state['daily_update_count']}次，达到上限{self.max_updates_per_day}"
+            )
+            return False
+
+        # 检查每周限制
+        if (
+            self.max_updates_per_week > 0
+            and self.state["weekly_update_count"] >= self.max_updates_per_week
+        ):
+            logger.debug(
+                f"[Profile更新器] 本周已更新{self.state['weekly_update_count']}次，达到上限{self.max_updates_per_week}"
+            )
+            return False
+
+        return True
 
     def _can_update(self, update_type: str) -> bool:
         """检查是否可以更新
@@ -116,14 +167,46 @@ class AutoProfileUpdater:
         return True
 
     def _record_update(self, update_type: str):
-        """记录更新时间
+        """记录更新时间和更新频率
 
         Args:
             update_type: 更新类型
         """
         last_update_key = f"last_{update_type}_update"
         self.state[last_update_key] = time.time()
+
+        # 递增每日/每周更新计数
+        now = datetime.now()
+        today_str = now.strftime("%Y-%m-%d")
+        week_str = now.strftime("%Y-W%W")
+
+        if self.state.get("daily_update_date") != today_str:
+            self.state["daily_update_count"] = 0
+            self.state["daily_update_date"] = today_str
+        self.state["daily_update_count"] = self.state.get("daily_update_count", 0) + 1
+
+        if self.state.get("weekly_update_week") != week_str:
+            self.state["weekly_update_count"] = 0
+            self.state["weekly_update_week"] = week_str
+        self.state["weekly_update_count"] = self.state.get("weekly_update_count", 0) + 1
+
+        # 记录更新历史
+        if "update_history" not in self.state:
+            self.state["update_history"] = []
+        self.state["update_history"].append(
+            {
+                "type": update_type,
+                "timestamp": time.time(),
+                "date": today_str,
+            }
+        )
+        # 只保留最近30条
+        self.state["update_history"] = self.state["update_history"][-30:]
+
         self._save_state()
+        logger.debug(
+            f"[Profile更新器] {update_type}更新已记录，今日{self.state['daily_update_count']}次，本周{self.state['weekly_update_count']}次"
+        )
 
     async def _generate_nickname(
         self, emotion: str, intensity: float, llm_action=None, context_data: str = ""
@@ -265,6 +348,11 @@ class AutoProfileUpdater:
             )
             return result
 
+        # 检查每日/每周更新频率限制
+        if not self._check_frequency_limit():
+            logger.debug("[Profile更新器] 达到每日/每周更新频率限制，跳过")
+            return result
+
         logger.info(f"[Profile更新器] 检测到强情绪: {emotion} (强度: {intensity:.2f})")
 
         # 记录情绪历史
@@ -310,7 +398,8 @@ class AutoProfileUpdater:
 
                 # 使用LLM生成头像（通过图片生成API）
                 image_url = await llm_action._request_image_with_fallback(
-                    avatar_prompt, "1:1"
+                    avatar_prompt,
+                    llm_action.size if hasattr(llm_action, "size") else "1024x1024",
                 )
                 if image_url:
                     # 设置头像

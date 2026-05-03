@@ -2,9 +2,9 @@
 拟人化角色行为系统插件 (Realistic Persona Plugin)
 整合了情绪感知、生活模拟、QQ空间日记、AI配图等功能
 
-版本: v1.18.2
+版本: v1.19.0
 作者: LMG-arch
-最后更新: 2026-05-03
+最后更新: 2026-05-04
 符合AstrBot插件开发完全指南规范
 """
 
@@ -200,6 +200,8 @@ class Main(Star):
 
         # 存储当前请求的event（用于工具调用解析）
         self._current_event = None
+        # 待执行的Profile更新（异步思考生成但需要event才能执行的更新）
+        self._pending_profile_update = None
 
         # 检查版本
         if not VersionComparator.compare_version(VERSION, "4.1.0") >= 0:
@@ -268,6 +270,11 @@ class Main(Star):
         self.enable_auto_avatar = config.get("enable_auto_avatar", False)
         self.profile_update_cooldown = config.get("profile_update_cooldown", 1800)
         self.emotion_change_threshold = config.get("emotion_change_threshold", 0.6)
+        self.enable_profile_update_from_thinking = config.get(
+            "enable_profile_update_from_thinking", False
+        )
+        self.profile_update_max_per_day = config.get("profile_update_max_per_day", 3)
+        self.profile_update_max_per_week = config.get("profile_update_max_per_week", 10)
 
         # ========== 人生故事引擎配置 ==========
         self.enable_life_story = config.get(
@@ -344,6 +351,8 @@ class Main(Star):
                 cooldown=self.profile_update_cooldown,
                 threshold=self.emotion_change_threshold,
                 persona_name=self.persona_name,
+                max_updates_per_day=self.profile_update_max_per_day,
+                max_updates_per_week=self.profile_update_max_per_week,
             )
             logger.info("自动Profile更新器已初始化")
 
@@ -380,6 +389,7 @@ class Main(Star):
                 context_provider=self._get_thinking_context,
                 think_interval_minutes=self.think_interval_minutes,
                 activity_interval_minutes=self.activity_interval_minutes,
+                on_thought_generated=self._on_thought_for_profile_update,
             )
 
             # 初始化人格演化系统
@@ -952,6 +962,97 @@ class Main(Star):
         except Exception as e:
             logger.error(f"[自动更新Profile] 失败: {e}", exc_info=True)
 
+    async def _on_thought_for_profile_update(self, thought: str):
+        """异步思考生成后触发Profile更新
+
+        通过分析思考内容的情绪来更新个人资料，让角色的变化更自然。
+
+        Args:
+            thought: 思考内容文本
+        """
+        if not self.enable_profile_update_from_thinking:
+            return
+        if not self.auto_profile_updater:
+            return
+        if (
+            not self.enable_auto_avatar
+            and not self.enable_auto_nickname
+            and not self.enable_auto_signature
+        ):
+            return
+
+        try:
+            # EmotionAnalyzer and EmotionType are imported at module level
+
+            # 分析思考内容的情绪
+            emotion = EmotionAnalyzer.analyze_emotion(thought)
+            if not emotion:
+                return
+
+            # 思考触发使用较低的强度（因为是内生情绪，不应太强烈）
+            thinking_emotion_intensity = {
+                EmotionType.EXCITED: 0.7,
+                EmotionType.HAPPY: 0.6,
+                EmotionType.SAD: 0.6,
+                EmotionType.ANGRY: 0.5,
+                EmotionType.SURPRISED: 0.4,
+                EmotionType.ANXIOUS: 0.5,
+                EmotionType.BORED: 0.3,
+                EmotionType.CONFUSED: 0.3,
+                EmotionType.CURIOUS: 0.4,
+                EmotionType.CALM: 0.1,
+            }
+            intensity = thinking_emotion_intensity.get(emotion, 0.3)
+
+            if intensity < self.auto_profile_updater.threshold:
+                return
+
+            logger.info(
+                f"[Profile更新] 异步思考触发 - 情绪: {emotion.value} (强度: {intensity:.2f})"
+            )
+
+            # 使用一个虚拟事件对象来触发更新
+            # 因为思考不是用户消息触发的，我们只需要触发签名等不需要event的更新
+            # 对于需要event的更新（如修改QQ资料），需要有bot对象
+            # 这里只更新本地状态，不执行实际的QQ API调用
+            if not self._check_frequency_limit():
+                return
+
+            # 生成新的签名（不需要event对象）
+            if (
+                self.auto_profile_updater.enable_signature
+                and self.auto_profile_updater._can_update("signature")
+            ):
+                new_signature = self.auto_profile_updater._generate_signature(
+                    emotion.value, intensity
+                )
+                if new_signature != self.auto_profile_updater.state.get(
+                    "current_signature"
+                ):
+                    # 思考触发只能更新本地状态，无法调用QQ API
+                    # 将待更新的状态保存，下次有event时执行
+                    self._pending_profile_update = {
+                        "type": "signature",
+                        "value": new_signature,
+                        "emotion": emotion.value,
+                        "intensity": intensity,
+                        "timestamp": time.time(),
+                    }
+                    self.auto_profile_updater.state["current_signature"] = new_signature
+                    self.auto_profile_updater._record_update("signature")
+                    logger.info(
+                        f"[Profile更新] 异步思考生成新签名: {new_signature}（待下次用户互动时应用）"
+                    )
+
+        except Exception as e:
+            logger.debug(f"[Profile更新] 异步思考触发失败: {e}")
+
+    def _check_frequency_limit(self) -> bool:
+        """检查更新频率限制（main.py层面的快速检查）"""
+        if not self.auto_profile_updater:
+            return False
+        return self.auto_profile_updater._check_frequency_limit()
+
     def _update_favorability(self, event: AstrMessageEvent) -> None:
         """根据会话活动简单累计好感度"""
         try:
@@ -1344,7 +1445,8 @@ class Main(Star):
                         return
 
                 # 调度一条新的主动消息（在空闲延迟后发送）
-                proactive_msg = await self._generate_proactive_greeting(session_id)
+                # 延迟生成问候内容：不在调度时调用LLM，而是在实际发送时才生成
+                # 避免每次用户发消息都触发LLM调用浪费token
 
                 # 使用完整的 unified_msg_origin 作为 session_id
                 # AstrBot send_message 需要 "platform_id:message_type:session_id" 格式
@@ -1353,7 +1455,7 @@ class Main(Star):
                 )
 
                 self.proactive_manager.schedule_message(
-                    message=proactive_msg,
+                    message="",  # 空消息，发送时由LLM生成
                     delay=self.idle_greeting_delay,
                     session_id=send_session_id,
                     context_data={
@@ -1365,7 +1467,7 @@ class Main(Star):
                     },
                 )
                 logger.debug(
-                    f"[主动消息] 已调度空闲问候，{self.idle_greeting_delay}秒后发送"
+                    f"[主动消息] 已调度空闲问候，{self.idle_greeting_delay}秒后发送（内容将在发送时生成）"
                 )
 
             # 从用户消息中提取技能、兴趣等，自动更新成長追踪
@@ -1641,18 +1743,24 @@ class Main(Star):
         """发送主动消息的回调函数
 
         Args:
-            message: 消息内容
-            session_id: 会话 ID
+            message: 消息内容（为空时将在发送时由LLM生成）
+            session_id: 会话 ID（unified_msg_origin 格式）
             context_data: 上下文数据
         """
         try:
-            logger.info(f"[主动消息] 准备发送到会话 {session_id}: {message[:50]}...")
-
             if not session_id:
                 logger.warning("[主动消息] 缺少session_id，无法发送")
                 return
 
-            logger.info(f"[主动消息] 触发 - 会话: {session_id}")
+            # 如果消息为空，在发送时才调用LLM生成（延迟生成策略）
+            if not message:
+                user_id = context_data.get("user_id", "")
+                message = await self._generate_proactive_greeting(user_id)
+                if not message:
+                    logger.warning("[主动消息] 无法生成问候消息，跳过")
+                    return
+
+            logger.info(f"[主动消息] 准备发送到会话 {session_id}: {message[:50]}...")
             logger.info(f"[主动消息] 内容: {message}")
 
             # 通过 AstrBot Context.send_message 发送消息
@@ -1823,6 +1931,31 @@ class Main(Star):
         except Exception as e:
             logger.debug(f"获取对话历史上下文失败: {e}")
         return []
+
+    async def _get_available_sessions(self) -> list[dict]:
+        """通过AstrBot数据库API获取已知会话列表
+
+        Returns:
+            会话信息列表，每个元素包含 session_id (unified_msg_origin) 和标题等信息
+        """
+        sessions = []
+        try:
+            db = self.context.get_db()
+            if db and hasattr(db, "get_session_conversations"):
+                result = await db.get_session_conversations(page=1, page_size=50)
+                if result:
+                    conv_list = result[0] if isinstance(result, tuple) else result
+                    for conv in conv_list:
+                        session_info = {
+                            "session_id": conv.get("session_id", ""),
+                            "persona_name": conv.get("persona_name", ""),
+                            "title": conv.get("title", ""),
+                        }
+                        if session_info["session_id"]:
+                            sessions.append(session_info)
+        except Exception as e:
+            logger.debug(f"[主动消息] 获取会话列表失败: {e}")
+        return sessions
 
     def _get_provider_id(self) -> str | None:
         """获取当前使用的 LLM 提供者 ID"""
@@ -2495,12 +2628,12 @@ class Main(Star):
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, max_delay)
 
-    async def _request_image_with_fallback(self, prompt: str, size: str) -> str:
+    async def _request_image_with_fallback(self, prompt: str, size: str = "") -> str:
         """调用图片生成API，支持多平台和自动切换
 
         Args:
             prompt: 图片生成提示词
-            size: 图片尺寸
+            size: 图片尺寸，为空时使用配置文件默认值
 
         Returns:
             图片URL
@@ -2511,6 +2644,10 @@ class Main(Star):
         # 获取配置的主平台和备用平台
         primary_provider = self.config.get("provider", "ms")
         backup_providers = self.config.get("backup_providers", ["openai", "aliyun"])
+
+        # 使用配置文件中的默认尺寸
+        if not size:
+            size = self.size if hasattr(self, "size") else "1024x1024"
 
         # 构建平台列表（主平台优先）
         all_providers = [primary_provider] + [
@@ -2731,17 +2868,21 @@ class Main(Star):
             raise e
 
     @filter.llm_tool(name="draw")
-    async def draw(self, event: AstrMessageEvent, prompt: str, size: str = "1024x1024"):
+    async def draw(self, event: AstrMessageEvent, prompt: str, size: str = ""):
         """根据用户请求生成图片。会先结合对话历史、角色人设、日程、天气、情绪等上下文信息，
         用LLM生成详细的绘图提示词后再生成图片。
 
         Args:
             prompt (str): 用户的绘图请求描述，例如"发张自拍"、"画一个风景"
-            size (str): 图片尺寸，默认为1024x1024。可选项：768x1344（竖屏）、1344x768（横屏）、512x512（小方形）
+            size (str): 图片尺寸，不指定则使用配置文件中的默认值。可选项：768x1344（竖屏）、1344x768（横屏）、512x512（小方形）
 
         Returns:
             str: 返回给LLM的指示信息
         """
+
+        # 从配置文件读取默认图片尺寸
+        if not size:
+            size = self.size
 
         logger.info(f"[绘图工具] 被调用 - prompt: {prompt[:50]}..., size: {size}")
         logger.info(
@@ -2829,6 +2970,33 @@ class Main(Star):
             yield event.chain_result(chain)
         except Exception as e:
             yield event.plain_result(f"生成图片失败: {str(e)}")
+
+    @filter.command("sessions")
+    async def list_sessions(self, event: AstrMessageEvent):
+        """列出可用的会话，方便用户配置主动消息白名单"""
+        try:
+            sessions = await self._get_available_sessions()
+            if not sessions:
+                yield event.plain_result(
+                    "暂无可用会话数据。\n"
+                    "提示：请直接使用当前会话ID配置主动消息白名单。\n"
+                    f"当前会话: {event.unified_msg_origin}"
+                )
+                return
+
+            lines = ["📋 可用会话列表：\n"]
+            for i, s in enumerate(sessions[:20], 1):
+                sid = s["session_id"]
+                title = s.get("title") or s.get("persona_name") or ""
+                lines.append(f"{i}. {sid}" + (f" ({title})" if title else ""))
+
+            lines.append(f"\n当前会话: {event.unified_msg_origin}")
+            lines.append(
+                "\n💡 将上述会话ID复制到「主动消息目标会话白名单」配置中即可。"
+            )
+            yield event.plain_result("\n".join(lines))
+        except Exception as e:
+            yield event.plain_result(f"获取会话列表失败: {e}")
 
     @filter.command("emotion_status")
     async def check_emotion_status(self, event: AstrMessageEvent):
@@ -3146,7 +3314,7 @@ class Main(Star):
                     logger.info(f"[写说说] 生成的配图提示词: {image_prompt}")
                     # 使用多平台 fallback 生图（ModelScope/OpenAI/阿里云）
                     image_url = await self.llm._request_image_with_fallback(
-                        image_prompt
+                        image_prompt, self.size
                     )
                     if image_url:
                         images = [image_url]
@@ -3594,6 +3762,22 @@ class Main(Star):
         # 根据角色自身回复的情绪自动更新个人资料
         # 角色是一个完整的人，有自己的喜怒哀乐，profile应反映它自身的心情
         if self.auto_profile_updater and isinstance(event, AiocqhttpMessageEvent):
+            # 应用异步思考期间生成的待执行Profile更新
+            if self._pending_profile_update:
+                try:
+                    pending = self._pending_profile_update
+                    # 只处理30分钟内的待更新（避免过期）
+                    if time.time() - pending.get("timestamp", 0) < 1800:
+                        if pending["type"] == "signature":
+                            await event.bot.set_self_longnick(longNick=pending["value"])
+                            logger.info(
+                                f"[Profile更新] 已应用异步思考生成的签名: {pending['value']}"
+                            )
+                    self._pending_profile_update = None
+                except Exception as e:
+                    logger.debug(f"[Profile更新] 应用待执行更新失败: {e}")
+                    self._pending_profile_update = None
+
             try:
                 bot_emotion = EmotionAnalyzer.analyze_emotion(text)
                 if bot_emotion:
