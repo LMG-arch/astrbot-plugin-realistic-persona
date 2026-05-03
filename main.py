@@ -2,9 +2,9 @@
 拟人化角色行为系统插件 (Realistic Persona Plugin)
 整合了情绪感知、生活模拟、QQ空间日记、AI配图等功能
 
-版本: v1.12.0
-作者: custom
-最后更新: 2026-05-03
+版本: v1.13.1
+作者: LMG-arch
+最后更新: 2025-07-17
 符合AstrBot插件开发完全指南规范
 """
 
@@ -100,7 +100,7 @@ except ImportError as e:
     "astrbot_plugin_realistic_persona",
     "LMG-arch",
     "拟人化角色行为系统：情绪感知、生活模拟、QQ空间日记、AI配图、异步思考、人格演化、人生故事引擎等",
-    "1.12.0",
+    "1.13.1",
     "https://github.com/LMG-arch/astrbot-plugin-realistic-persona.git",
 )
 class Main(Star):
@@ -676,6 +676,14 @@ class Main(Star):
         self.qzone = Qzone(client)
         logger.info("[QQ空间] Qzone对象创建完成")
 
+        # 登录QQ空间以初始化ctx
+        logger.info("[QQ空间] 登录QQ空间...")
+        await self.qzone.ready()
+        if not self.qzone.ctx:
+            logger.warning("[QQ空间] 登录失败，ctx未初始化，部分功能可能不可用")
+        else:
+            logger.info(f"[QQ空间] 登录成功，uin={self.qzone.ctx.uin}")
+
         # llm内容生成器
         logger.info("[QQ空间] 创建LLMAction对象...")
         self.llm = LLMAction(self.context, self.config, client)  # type: ignore[arg-type]
@@ -1137,10 +1145,13 @@ class Main(Star):
             try:
                 user_message = event.message_obj.message_str
                 session_id = event.get_session_id()
+                unified_msg_origin = event.unified_msg_origin
 
                 # 记录用户交互到经历银行
                 # 注：此时还没有AI回复，会在之后的访问中更新
-                await self._record_interaction_async(session_id, user_message)
+                await self._record_interaction_async(
+                    session_id, user_message, unified_msg_origin
+                )
 
                 # 人格演化：每日例行检查
                 if self.personality_evolution:
@@ -1186,7 +1197,7 @@ class Main(Star):
     # ========== 经历累积辅助方法 ==========
 
     async def _record_interaction_async(
-        self, session_id: str, user_message: str
+        self, session_id: str, user_message: str, unified_msg_origin: str = ""
     ) -> None:
         """记录用户交互到经历银行"""
         if not self.experience_bank:
@@ -1211,30 +1222,41 @@ class Main(Star):
                 )
 
                 # 清除该会话之前调度的主动消息（因为用户已经发消息）
-                self.proactive_manager.clear_scheduled_messages(session_id)
+                self.proactive_manager.clear_scheduled_messages(
+                    unified_msg_origin or session_id
+                )
+
+                # 检查是否在目标会话白名单中
+                target_sessions = self.config.get("proactive_target_sessions", "")
+                if target_sessions and unified_msg_origin:
+                    allowed = [
+                        s.strip() for s in target_sessions.split(",") if s.strip()
+                    ]
+                    if allowed and unified_msg_origin not in allowed:
+                        logger.debug(
+                            f"[主动消息] 会话 {unified_msg_origin} 不在白名单中，跳过调度"
+                        )
+                        return
 
                 # 调度一条新的主动消息（在空闲延迟后发送）
                 proactive_msg = await self._generate_proactive_greeting(session_id)
 
-                # 获取用户信息用于后续发送
-                user_id = session_id
-                platform = "unknown"
-                try:
-                    # 尝试从event中获取平台信息
-                    if hasattr(self, "_current_event") and self._current_event:
-                        if hasattr(self._current_event, "platform_meta"):
-                            platform = self._current_event.platform_meta.platform_name
-                except Exception:
-                    pass
+                # 使用完整的 unified_msg_origin 作为 session_id
+                # AstrBot send_message 需要 "platform_id:message_type:session_id" 格式
+                send_session_id = (
+                    unified_msg_origin if unified_msg_origin else session_id
+                )
 
                 self.proactive_manager.schedule_message(
                     message=proactive_msg,
                     delay=self.idle_greeting_delay,
-                    session_id=session_id,
+                    session_id=send_session_id,
                     context_data={
                         "triggered_by": "idle_detection",
-                        "user_id": user_id,
-                        "platform": platform,
+                        "user_id": session_id,
+                        "platform": unified_msg_origin.split(":")[0]
+                        if ":" in unified_msg_origin
+                        else "unknown",
                     },
                 )
                 logger.debug(

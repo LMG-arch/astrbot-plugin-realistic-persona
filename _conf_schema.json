@@ -129,6 +129,13 @@
     "condition": {"enable_proactive_messages": true},
     "hint": "用户空闲多久后发送问候消息"
   },
+  "proactive_target_sessions": {
+    "description": "主动消息目标会话白名单",
+    "type": "str",
+    "default": "",
+    "condition": {"enable_proactive_messages": true},
+    "hint": "指定接收主动消息的会话ID（格式：platform_id:message_type:session_id），多个用逗号分隔。留空则对所有会话生效"
+  },
   "enable_context_events": {
     "description": "启用上下文事件",
     "type": "bool",

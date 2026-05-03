@@ -538,6 +538,10 @@ pip install -r requirements.txt
   - **绘画历史参考**：自动参考最近2天的绘画记录，避免重复生成相同内容
   - **英文提示词优化**：LLM自动生成包含人物外貌、穿搭、场景、时间、光线、风格等细节的英文提示词
   - **详细LLM使用日志**：明确记录是否使用LLM生成提示词（✅/⚠️/ℹ️标识），方便调试
+- v1.13.1: 修复主动消息和QQ空间初始化
+  - **修复主动消息发送失败**：修复会话ID格式错误（"not enough values to unpack"），使用完整的 `unified_msg_origin` 格式（platform_id:message_type:session_id）
+  - **修复QQ空间ctx未初始化**：在创建Qzone对象后立即调用 `qzone.ready()` 完成登录，解决"operator.qzone.ctx 未初始化"问题
+  - **新增主动消息目标白名单**：添加 `proactive_target_sessions` 配置项，支持指定接收主动消息的会话ID列表
 
 
 ## 致谢
