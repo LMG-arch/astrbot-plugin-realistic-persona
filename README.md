@@ -678,6 +678,11 @@ pip install -r requirements.txt
   - **修复空返回日志缺失**：LLM返回空内容时增加warning日志，便于排查思考质量降级的原因
 
 
+- v1.19.2: 修复异步思考调度器导致插件加载失败
+  - **修复`AsyncThinkingScheduler.__init__()`缺少`on_thought_generated`参数**：`read_file`工具缓存导致源文件显示与磁盘实际内容不一致，该参数从未真正写入磁盘。通过AST解析和直接Python写入修复
+  - **支持异步回调**：`on_thought_generated`回调现在正确处理`async`函数（使用`asyncio.iscoroutine()`检测），确保`_on_thought_for_profile_update`的异步人格更新逻辑正常执行
+
+
 ## 致谢
 
 本插件整合了以下插件的功能：

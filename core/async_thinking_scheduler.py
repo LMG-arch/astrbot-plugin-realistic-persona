@@ -28,6 +28,7 @@ class AsyncThinkingScheduler:
         context_provider: Callable | None = None,
         think_interval_minutes: int = 20,
         activity_interval_minutes: int = 25,
+        on_thought_generated: Callable | None = None,
     ):
         """
         初始化调度器
@@ -56,6 +57,7 @@ class AsyncThinkingScheduler:
         # 回调函数
         self.on_weather_changed = on_weather_changed
         self.context_provider = context_provider
+        self.on_thought_generated = on_thought_generated
 
         # 缓存当前天气
         self.current_weather: str | None = None
@@ -164,6 +166,19 @@ class AsyncThinkingScheduler:
                     description=thought,
                     metadata={"weather": self.current_weather},
                 )
+
+                # 通知回调（用于人格更新等）
+                if self.on_thought_generated:
+                    try:
+                        import asyncio
+
+                        result = self.on_thought_generated(thought)
+                        if asyncio.iscoroutine(result):
+                            await result
+                    except Exception as cb_err:
+                        logger.warning(
+                            f"[异步思考] on_thought_generated 回调失败: {cb_err}"
+                        )
 
         except Exception as e:
             logger.error(f"[异步思考] 定期思考失败: {e}")
