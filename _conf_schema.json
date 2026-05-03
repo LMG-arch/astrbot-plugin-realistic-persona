@@ -13,8 +13,8 @@
   "ms_model": {
     "description": "ModelScope绘图模型",
     "type": "string",
-    "default": "iic/sdxl-turbo",
-    "hint": "ModelScope上的文生图模型名称，如：iic/sdxl-turbo, stable-diffusion-xl-base-1.0"
+    "default": "Qwen/Qwen-Image",
+    "hint": "ModelScope上的文生图模型名称，如：Qwen/Qwen-Image、FLUX.1-dev、Z-Image-Turbo（需在AIGC专区搜索确认模型支持API推理）"
   },
   "openai_model": {
     "description": "OpenAI绘图模型",
@@ -74,9 +74,9 @@
   "size": {
     "description": "默认图片尺寸",
     "type": "string",
-    "default": "1080x1920",
-    "options": ["1080x1920", "1920x1080", "1024x1024", "512x512"],
-    "labels": ["竖屏(1080x1920)", "横屏(1920x1080)", "方形(1024x1024)", "小方形(512x512)"]
+    "default": "1024x1024",
+    "options": ["1024x1024", "512x512", "768x1344", "1344x768"],
+    "labels": ["方形(1024x1024)", "小方形(512x512)", "竖屏(768x1344)", "横屏(1344x768)"]
   },
   "image_forbidden_rules": {
     "description": "绘画禁止规则",

@@ -144,8 +144,8 @@ class Main(Star):
 
         # ========== AI绘图配置 ==========
         self.api_key = config.get("api_key")
-        self.model = config.get("model", "iic/sdxl-turbo")
-        self.size = config.get("size", "1080x1920")
+        self.model = config.get("ms_model", "Qwen/Qwen-Image")
+        self.size = config.get("size", "1024x1024")
         self.api_url = config.get("api_url", "https://api-inference.modelscope.cn/")
         self.provider = config.get("provider", "ms")
 
@@ -2317,12 +2317,12 @@ class Main(Star):
             raise e
 
     @filter.llm_tool(name="draw")
-    async def draw(self, event: AstrMessageEvent, prompt: str, size: str = "1080x1920"):
+    async def draw(self, event: AstrMessageEvent, prompt: str, size: str = "1024x1024"):
         """根据提示词生成图片，支持AI自拍和情绪表达
 
         Args:
             prompt (str): 图片提示词，应包含主体、场景、风格等必要信息。例如：“一个开心微笑的中国女孩，真实风格，明亮色彩”
-            size (str): 图片尺寸，默认为1080x1920。可选项：1920x1024（横屏）、1024x1024（方形）等
+            size (str): 图片尺寸，默认为1024x1024。可选项：768x1344（竖屏）、1344x768（横屏）、512x512（小方形）
 
         Returns:
             str: 返回给LLM的指示信息
@@ -2884,7 +2884,7 @@ class Main(Star):
                 )
 
                 # 从配置文件获取图片尺寸，如果 LLM 没有指定的话
-                size = params.get("size", self.config.get("size", "1080x1920"))
+                size = params.get("size", self.config.get("size", "1024x1024"))
                 logger.info(f"[工具调用] 开始执行 draw (尺寸: {size})")
                 logger.info(f"[工具调用] 原始提示词: {original_prompt[:100]}...")
                 logger.info(f"[工具调用] 增强提示词: {enhanced_prompt[:100]}...")
@@ -3005,19 +3005,19 @@ class Main(Star):
                                     )
                                     size = input_obj.get(
                                         "aspect_ratio",
-                                        input_obj.get("size", "1080x1920"),
+                                        input_obj.get("size", "1024x1024"),
                                     )
                                 except json.JSONDecodeError:
                                     # 如果action_input不是JSON，直接作为提示词处理
                                     prompt = action_input
-                                    size = "1080x1920"
+                                    size = "1024x1024"
                             else:
                                 prompt = action_input.get(
                                     "prompt", action_input.get("description", "")
                                 )
                                 size = action_input.get(
                                     "aspect_ratio",
-                                    action_input.get("size", "1080x1920"),
+                                    action_input.get("size", "1024x1024"),
                                 )
                         else:
                             # 如果没有action_input，尝试从JSON对象中直接提取
@@ -3025,7 +3025,7 @@ class Main(Star):
                                 "prompt", json_obj.get("description", "")
                             )
                             size = json_obj.get(
-                                "aspect_ratio", json_obj.get("size", "1080x1920")
+                                "aspect_ratio", json_obj.get("size", "1024x1024")
                             )
 
                         if prompt:
@@ -3093,7 +3093,7 @@ class Main(Star):
 
                         try:
                             # 调用绘图工具
-                            result = await self.draw(event, prompt, "1080x1920")
+                            result = await self.draw(event, prompt, "1024x1024")
 
                             # 如果成功，记录日志
                             if result and "失败" not in result and "错误" not in result:
@@ -3136,17 +3136,17 @@ class Main(Star):
                                     "prompt", input_obj.get("description", "")
                                 )
                                 size = input_obj.get(
-                                    "aspect_ratio", input_obj.get("size", "1080x1920")
+                                    "aspect_ratio", input_obj.get("size", "1024x1024")
                                 )
                             except json.JSONDecodeError:
                                 prompt = action_input
-                                size = "1080x1920"
+                                size = "1024x1024"
                         else:
                             prompt = action_input.get(
                                 "prompt", action_input.get("description", "")
                             )
                             size = action_input.get(
-                                "aspect_ratio", action_input.get("size", "1080x1920")
+                                "aspect_ratio", action_input.get("size", "1024x1024")
                             )
 
                         if prompt:

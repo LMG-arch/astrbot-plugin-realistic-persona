@@ -128,8 +128,23 @@
 pip install -r requirements.txt
 ```
 
+### 依赖说明
+
+| 依赖 | 用途 | 是否必需 |
+|---|---|---|
+| `aiohttp` | HTTP客户端（天气、新闻、绘图API请求） | ✅ 必需 |
+| `apscheduler` | 定时任务（自动发说说、异步思考调度） | ✅ 必需 |
+| `pydantic` | 数据校验 | ✅ 必需 |
+| `aiocqhttp` | QQ平台适配（QQ空间功能的核心依赖） | QQ空间功能必需 |
+| `beautifulsoup4` | HTML解析（QQ空间页面抓取） | QQ空间功能必需 |
+| `json5` | JSON解析（QQ空间数据处理） | QQ空间功能必需 |
+| `lxml` | XML/HTML解析引擎（bs4的后端） | QQ空间功能必需 |
+| `pillowmd` | 图片处理（QQ空间图片样式、自动生成头像） | 可选 |
+
+> **注意**：如果只使用AI绘图和情绪感知等功能，只需安装前三个核心依赖。QQ空间相关依赖（`aiocqhttp`等）在未安装时会自动降级，不会影响其他功能。
+
 3. 配置插件：
-   - `api_key`: ModelScope API密钥（必需）
+   - `api_key`: ModelScope API密钥（绘图功能必需）
    - `persona_name`: 角色名称
    - `persona_profile`: 角色人设描述
    - `weather_location`: 天气查询位置
@@ -320,8 +335,8 @@ pip install -r requirements.txt
    - 失眠发布不计入每日限额
    - 达到每日限额后自动跳过
 
-1. QQ空间功能需要aiocqhttp平台支持
-2. 需要有效的ModelScope API密钥才能使用绘图功能
+1. QQ空间功能需要aiocqhttp平台支持，并需安装`aiocqhttp`、`beautifulsoup4`、`json5`、`lxml`等依赖
+2. 需要有效的ModelScope API密钥才能使用绘图功能（需在[ModelScope](https://modelscope.cn/my/myaccesstoken)获取Token并完成实名认证）
 3. 建议合理设置各项概率和时间参数，避免过于频繁
 4. pillowmd依赖可选，如不使用QQ空间功能可不安装
 5. **生活模拟功能需要启用天气工具和联网工具**以获取真实数据：
@@ -498,9 +513,12 @@ pip install -r requirements.txt
   - **修复主动消息发送失败**：使用正确的`Context.send_message()`API替代不存在的`platform_adapter.send_message()`
   - **修复ModelScope API调用400错误**：修正API参数名（`steps`而非`num_inference_steps`）和类型（int而非string）
   - **修复api_url默认值不一致**：统一为`https://api-inference.modelscope.cn/`，与配置文件schema和ModelScope官方文档一致
+  - **修复绘图配置键名不匹配**：`ms_model`配置键未被正确读取，改为`config.get("ms_model")`
+  - **更新默认绘图模型**：`iic/sdxl-turbo`已从ModelScope下架，替换为`Qwen/Qwen-Image`；默认尺寸改为`1024x1024`
   - **修复版本标识过时**：更新main.py头部版本注释为v1.12.0
   - **优化QQ空间功能错误提示**：区分配置未启用和依赖未安装两种错误，给出更明确的提示信息
   - **增强异步思考上下文关联**：思考引擎生成内心独白时会结合当前日程、天气、新闻、最近对话和经历，不再随机生成泛泛内容
+  - **补充缺失的依赖声明**：`requirements.txt`添加`aiocqhttp`、`beautifulsoup4`、`json5`、`lxml`，解决QQ空间模块加载失败问题
 
 
 
