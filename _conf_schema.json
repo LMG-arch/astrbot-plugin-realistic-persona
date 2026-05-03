@@ -323,6 +323,13 @@
     "condition": {"enable_qzone": true},
     "hint": "生成评论内容时使用的系统提示"
   },
+  "enable_auto_reply_comments": {
+    "description": "自动回复QQ空间评论",
+    "type": "bool",
+    "default": true,
+    "condition": {"enable_qzone": true},
+    "hint": "自动检查并回复别人对你说说的评论（独立于自动发说说，即使未开启自动发说说也会生效）"
+  },
   
   "_section_async_thinking": {
     "description": "========== 异步思考系统配置 ==========",

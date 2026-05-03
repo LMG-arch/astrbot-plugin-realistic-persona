@@ -2,7 +2,7 @@
 拟人化角色行为系统插件 (Realistic Persona Plugin)
 整合了情绪感知、生活模拟、QQ空间日记、AI配图等功能
 
-版本: v1.19.2
+版本: v1.19.3
 作者: LMG-arch
 最后更新: 2025-07-15
 符合AstrBot插件开发完全指南规范
@@ -204,7 +204,7 @@ class ThinkingLLM:
     "astrbot_plugin_realistic_persona",
     "LMG-arch",
     "拟人化角色行为系统：情绪感知、生活模拟、QQ空间日记、AI配图、异步思考、人格演化、人生故事引擎等",
-    "1.19.2",
+    "1.19.3",
     "https://github.com/LMG-arch/astrbot-plugin-realistic-persona.git",
 )
 class Main(Star):
@@ -298,6 +298,7 @@ class Main(Star):
         self.diary_user_id = config.get("diary_user_id", "")  # 优先使用的对话用户ID
         self.diary_prompt = config.get("diary_prompt", "")
         self.comment_prompt = config.get("comment_prompt", "")
+        self.enable_auto_reply_comments = config.get("enable_auto_reply_comments", True)
 
         # ========== 个人资料自动更新配置 ==========
         self.enable_auto_profile_update = config.get(
@@ -744,6 +745,15 @@ class Main(Star):
                         logger.debug("自动发布模块已清理")
                     except Exception as e:
                         logger.debug(f"清理自动发布模块失败: {e}")
+                if (
+                    hasattr(self, "_comment_check_scheduler")
+                    and self._comment_check_scheduler
+                ):
+                    try:
+                        self._comment_check_scheduler.shutdown(wait=False)
+                        logger.debug("独立评论检查调度器已清理")
+                    except Exception as e:
+                        logger.debug(f"清理独立评论检查调度器失败: {e}")
 
             logger.info("拟人化角色行为系统插件已卸载")
         except Exception as e:
@@ -841,6 +851,7 @@ class Main(Star):
         logger.info("[QQ空间] PostOperator创建完成")
 
         # 加载自动发说说模块（仅在启用时）
+        self._comment_check_scheduler = None
         if self.config.get("enable_qzone") and (
             self.config.get("publish_times_per_day", 0) > 0
             or self.config.get("insomnia_probability", 0) > 0
@@ -854,11 +865,58 @@ class Main(Star):
             logger.info(
                 "[QQ空间] 未启用自动发说说（enable_qzone=False 或 publish_times_per_day=0 且 insomnia_probability=0）"
             )
+            # AutoPublish 未创建时，独立启动评论检查（如果开启了自动回复评论）
+            if self.config.get("enable_qzone") and self.config.get(
+                "enable_auto_reply_comments", True
+            ):
+                self._start_standalone_comment_check()
 
         logger.info("[QQ空间] 初始化完成！")
         logger.info(
             f"[QQ空间] 组件状态: qzone={'OK' if hasattr(self, 'qzone') else 'MISSING'}, llm={'OK' if hasattr(self, 'llm') else 'MISSING'}, operator={'OK' if hasattr(self, 'operator') else 'MISSING'}"
         )
+
+    def _start_standalone_comment_check(self):
+        """独立启动评论检查定时器（不依赖AutoPublish）"""
+        try:
+            import zoneinfo
+            from apscheduler.schedulers.asyncio import AsyncIOScheduler
+            from apscheduler.triggers.interval import IntervalTrigger
+
+            tz = self.context.get_config().get("timezone")
+            timezone = (
+                zoneinfo.ZoneInfo(tz) if tz else zoneinfo.ZoneInfo("Asia/Shanghai")
+            )
+
+            self._comment_check_scheduler = AsyncIOScheduler(timezone=timezone)
+            self._comment_check_scheduler.add_job(
+                func=self._standalone_check_and_reply_comments,
+                trigger=IntervalTrigger(minutes=10, timezone=timezone),
+                name="standalone_comment_checker",
+                max_instances=1,
+            )
+            self._comment_check_scheduler.start()
+            logger.info("[QQ空间][独立评论检查] 已启动，每10分钟检查一次")
+        except Exception as e:
+            logger.error(f"[QQ空间][独立评论检查] 启动失败: {e}")
+
+    async def _standalone_check_and_reply_comments(self):
+        """独立评论检查的回调函数"""
+        try:
+            if not hasattr(self, "operator") or not self.operator:
+                logger.warning("[独立评论检查] operator 未初始化，跳过")
+                return
+            if not hasattr(self.operator, "qzone") or not self.operator.qzone:
+                logger.warning("[独立评论检查] operator.qzone 未初始化，跳过")
+                return
+            if not hasattr(self.operator.qzone, "ctx") or not self.operator.qzone.ctx:
+                logger.warning("[独立评论检查] operator.qzone.ctx 未初始化，跳过")
+                return
+            logger.debug("[独立评论检查] 开始检查新评论并回复")
+            await self.operator.auto_reply_to_comments()
+            logger.debug("[独立评论检查] 评论检查和回复完成")
+        except Exception as e:
+            logger.error(f"[独立评论检查] 检查和回复评论失败: {e}")
 
     # ========== 事件处理器注册 ==========
 

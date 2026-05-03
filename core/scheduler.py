@@ -60,7 +60,8 @@ class AutoPublish:
         self.scheduler.start()
         self._schedule_daily_posts()
         self._schedule_insomnia_check()
-        self._schedule_comment_check()
+        if self.config.get("enable_auto_reply_comments", True):
+            self._schedule_comment_check()
 
         logger.info(
             f"[自动发说说] 已启动，每天{self.publish_times_per_day}次，时间段{self.publish_time_ranges}"
