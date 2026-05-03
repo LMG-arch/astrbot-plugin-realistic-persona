@@ -109,12 +109,62 @@ class ThoughtEngine:
                 encoding="utf-8",
             )
 
+    def _extract_relevant_schedule(self, schedule: str, current_hour: int) -> str:
+        """从完整日程中提取与当前时间段相关的部分"""
+        if not schedule:
+            return ""
+
+        # Time period keywords to match against schedule lines
+        time_keywords = {
+            range(6, 9): ["早上", "起床", "晨", "早餐"],
+            range(9, 12): ["上午", "上课", "上班", "学习", "工作"],
+            range(12, 14): ["中午", "午饭", "午餐", "午休"],
+            range(14, 18): ["下午", "继续"],
+            range(18, 21): ["傍晚", "晚", "晚饭", "晚餐", "散步", "娱乐"],
+            range(21, 24): ["睡前", "睡觉", "洗漱", "休息"],
+            range(0, 6): ["失眠", "深夜", "凌晨"],
+        }
+
+        # Find the matching keywords for current hour
+        keywords = []
+        for time_range, kws in time_keywords.items():
+            if current_hour in time_range:
+                keywords = kws
+                break
+
+        if not keywords:
+            return ""
+
+        # Extract relevant lines from the schedule
+        lines = schedule.split("\n")
+        relevant = []
+        for line in lines:
+            line_stripped = line.strip()
+            if not line_stripped:
+                continue
+            for kw in keywords:
+                if kw in line_stripped:
+                    relevant.append(line_stripped)
+                    break
+            # Also match time ranges like "9:", "14:", etc.
+            for i in range(current_hour, current_hour + 3):
+                if f"{i}:" in line_stripped or f"{i:02d}:" in line_stripped:
+                    if line_stripped not in relevant:
+                        relevant.append(line_stripped)
+                    break
+
+        return "；".join(relevant[:3]) if relevant else ""
+
     async def generate_thought(
         self,
         llm_action,
         weather: str | None = None,
         current_time: datetime | None = None,
         persona_profile: str = "",
+        schedule: str | None = None,
+        news: str | None = None,
+        recent_conversations: str | None = None,
+        recent_experiences: str | None = None,
     ) -> str | None:
         """
         使用大模型生成一条思考/内心独白
@@ -124,6 +174,10 @@ class ThoughtEngine:
             weather: 当前天气
             current_time: 当前时间
             persona_profile: 人格描述，用于指导大模型生成符合人设的思考
+            schedule: 今日日程
+            news: 今日新闻
+            recent_conversations: 最近对话摘要
+            recent_experiences: 最近经历摘要
 
         Returns:
             生成的思考内容
@@ -144,15 +198,35 @@ class ThoughtEngine:
             else:
                 time_info = "深夜/凌晨"
 
-            weather_info = f"，天气：{weather}" if weather else ""
+            # 构建丰富的上下文信息
+            context_parts = []
+            if weather:
+                context_parts.append(f"天气：{weather}")
+            if schedule:
+                # 只取与当前时间段相关的日程
+                schedule_excerpt = self._extract_relevant_schedule(schedule, hour)
+                if schedule_excerpt:
+                    context_parts.append(f"当前日程安排：{schedule_excerpt}")
+            if news:
+                context_parts.append(f"今日新闻：{news[:100]}")
+            if recent_conversations:
+                context_parts.append(f"最近聊天：{recent_conversations[:120]}")
+            if recent_experiences:
+                context_parts.append(f"最近经历：{recent_experiences[:100]}")
 
-            prompt = f"""你是{persona_profile if persona_profile else "一个有思考能力的人"}。现在是{current_time.strftime("%Y年%m月%d日 %H:%M")}，{time_info}{weather_info}。
+            context_info = "；".join(context_parts) if context_parts else "暂无额外信息"
 
-请生成一段内心独白或思考，可以是对当前时间、天气的感受，对生活的思考，或者任何符合当前情境的想法。要求：
-1. 内容真实自然，像真人内心独白
+            prompt = f"""你是{persona_profile if persona_profile else "一个有思考能力的人"}。
+现在是{current_time.strftime("%Y年%m月%d日 %H:%M")}，{time_info}。
+
+当前情境：{context_info}
+
+请基于以上真实情境，生成一段属于你自己的内心独白或思考。要求：
+1. 内容真实自然，像真人内心独白，不要泛泛而谈
 2. 长度在15-50字之间
-3. 体现当前的时间和天气情境
-4. 符合你的人设特点
+3. 必须结合当前的日程、天气、最近聊天内容或经历来思考，体现你是一个有真实生活的人
+4. 符合你的人设特点，有个人情感色彩
+5. 不要列出信息，而是表达你对这些事情的感受或想法
 
 内心独白："""
 
@@ -211,13 +285,22 @@ class ThoughtEngine:
             return None
 
     async def generate_activity(
-        self, current_time: datetime | None = None
+        self,
+        llm_action=None,
+        current_time: datetime | None = None,
+        persona_profile: str = "",
+        weather: str | None = None,
+        schedule: str | None = None,
     ) -> str | None:
         """
-        生成日常活动记录
+        生成日常活动记录，优先使用LLM结合上下文生成
 
         Args:
+            llm_action: LLM动作实例，用于调用大模型生成活动
             current_time: 当前时间
+            persona_profile: 人格描述
+            weather: 当前天气
+            schedule: 当前日程
 
         Returns:
             生成的活动内容
@@ -226,6 +309,53 @@ class ThoughtEngine:
             if current_time is None:
                 current_time = datetime.now()
 
+            # 优先使用LLM生成真实的活动
+            if llm_action:
+                try:
+                    hour = current_time.hour
+                    if 6 <= hour < 12:
+                        time_info = "清晨/上午"
+                    elif 12 <= hour < 14:
+                        time_info = "中午"
+                    elif 14 <= hour < 18:
+                        time_info = "下午"
+                    elif 18 <= hour < 22:
+                        time_info = "傍晚/晚上"
+                    else:
+                        time_info = "深夜"
+
+                    context_parts = []
+                    context_parts.append(
+                        f"现在是{current_time.strftime('%Y年%m月%d日 %H:%M')}，{time_info}"
+                    )
+                    if weather:
+                        context_parts.append(f"天气：{weather}")
+                    if schedule:
+                        schedule_excerpt = self._extract_relevant_schedule(
+                            schedule, hour
+                        )
+                        if schedule_excerpt:
+                            context_parts.append(f"当前日程安排：{schedule_excerpt}")
+                    persona_desc = (
+                        persona_profile if persona_profile else "一个有生活的人"
+                    )
+
+                    prompt = f"你是{persona_desc}。\n"
+                    prompt += "；".join(context_parts)
+                    prompt += "\n\n请描述你此刻正在做的一件具体日常小事，如在做什么、吃什么、看什么、想什么等。要具体有画面感，不要泛泛而谈。"
+
+                    activity = await llm_action.generate_activity(prompt)
+                    if activity:
+                        self._save_activity(activity, current_time)
+                        logger.info(f"[思考引擎] LLM生成活动: {activity}")
+                        return activity
+                    else:
+                        logger.warning("[思考引擎] LLM未能生成活动，使用备用方案")
+                except Exception as e:
+                    logger.warning(f"[思考引擎] LLM生成活动失败: {e}，使用备用方案")
+
+            # 备用方案：从模板随机选择
+            logger.debug("[思考引擎] 使用备用活动生成方案")
             activity = random.choice(self.DAILY_ACTIVITIES)
 
             # 记录活动

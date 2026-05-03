@@ -26,6 +26,8 @@ class AsyncThinkingScheduler:
         on_weather_changed: Callable | None = None,
         persona_profile: str = "",
         context_provider: Callable | None = None,
+        think_interval_minutes: int = 20,
+        activity_interval_minutes: int = 25,
     ):
         """
         初始化调度器
@@ -37,12 +39,16 @@ class AsyncThinkingScheduler:
             on_weather_changed: 天气变化时的回调函数
             persona_profile: 人格描述，用于指导大模型生成符合人设的思考
             context_provider: 异步回调函数，返回 dict 包含 schedule/news/recent_conversations/recent_experiences
+            think_interval_minutes: 思考触发间隔(分钟)
+            activity_interval_minutes: 活动记录间隔(分钟)
         """
         # 使用传入的引擎实例
         self.thought_engine = thought_engine
         self.experience_bank = experience_bank
         self.llm_action = llm_action
         self.persona_profile = persona_profile
+        self.think_interval_minutes = think_interval_minutes
+        self.activity_interval_minutes = activity_interval_minutes
 
         # 调度器
         self.scheduler = AsyncIOScheduler()
@@ -64,18 +70,18 @@ class AsyncThinkingScheduler:
                 logger.warning("[异步思考] 调度器已在运行")
                 return
 
-            # 安排定期思考任务（每15-30分钟）
+            # 安排定期思考任务（使用配置的间隔）
             self.scheduler.add_job(
                 func=self._scheduled_think,
-                trigger=IntervalTrigger(minutes=20),  # 每20分钟思考一次
+                trigger=IntervalTrigger(minutes=self.think_interval_minutes),
                 name="thought_generator",
                 max_instances=1,
             )
 
-            # 安排定期活动记录任务（每25-35分钟）
+            # 安排定期活动记录任务（使用配置的间隔）
             self.scheduler.add_job(
                 func=self._scheduled_activity,
-                trigger=IntervalTrigger(minutes=25),  # 每25分钟记录一个活动
+                trigger=IntervalTrigger(minutes=self.activity_interval_minutes),
                 name="activity_recorder",
                 max_instances=1,
             )
@@ -93,7 +99,9 @@ class AsyncThinkingScheduler:
             self.scheduler.start()
             self.is_running = True
 
-            logger.info("[异步思考] 调度器已启动")
+            logger.info(
+                f"[异步思考] 调度器已启动，思考间隔{self.think_interval_minutes}分钟，活动间隔{self.activity_interval_minutes}分钟"
+            )
 
         except Exception as e:
             logger.error(f"[异步思考] 启动调度器失败: {e}")
@@ -117,11 +125,36 @@ class AsyncThinkingScheduler:
         """定期思考任务"""
         try:
             logger.info("[异步思考] 触发定期思考")
+
+            # 通过上下文提供者获取丰富的上下文信息
+            schedule = None
+            news = None
+            recent_conversations = None
+            recent_experiences = None
+
+            if self.context_provider:
+                try:
+                    ctx = await self.context_provider()
+                    if ctx and isinstance(ctx, dict):
+                        schedule = ctx.get("schedule")
+                        news = ctx.get("news")
+                        recent_conversations = ctx.get("recent_conversations")
+                        recent_experiences = ctx.get("recent_experiences")
+                        # Also update weather from context if available
+                        if ctx.get("weather") and not self.current_weather:
+                            self.current_weather = ctx["weather"]
+                except Exception as e:
+                    logger.debug(f"[异步思考] 获取上下文失败: {e}")
+
             thought = await self.thought_engine.generate_thought(
                 llm_action=self.llm_action,
                 weather=self.current_weather,
                 current_time=datetime.now(),
                 persona_profile=self.persona_profile,
+                schedule=schedule,
+                news=news,
+                recent_conversations=recent_conversations,
+                recent_experiences=recent_experiences,
             )
 
             if thought:
@@ -136,11 +169,28 @@ class AsyncThinkingScheduler:
             logger.error(f"[异步思考] 定期思考失败: {e}")
 
     async def _scheduled_activity(self):
-        """定期活动记录任务"""
+        """定期活动记录任务，使用LLM结合上下文生成活动内容"""
         try:
             logger.info("[异步思考] 触发日常活动记录")
+
+            # 通过上下文提供者获取丰富的上下文信息
+            schedule = None
+            if self.context_provider:
+                try:
+                    ctx = await self.context_provider()
+                    if ctx and isinstance(ctx, dict):
+                        schedule = ctx.get("schedule")
+                        if ctx.get("weather") and not self.current_weather:
+                            self.current_weather = ctx["weather"]
+                except Exception as e:
+                    logger.debug(f"[异步思考] 获取活动上下文失败: {e}")
+
             activity = await self.thought_engine.generate_activity(
-                current_time=datetime.now()
+                llm_action=self.llm_action,
+                current_time=datetime.now(),
+                persona_profile=self.persona_profile,
+                weather=self.current_weather,
+                schedule=schedule,
             )
 
             if activity:
@@ -224,32 +274,3 @@ class AsyncThinkingScheduler:
             )
         except Exception as e:
             logger.error(f"[异步思考] 记录互动失败: {e}")
-
-    def update_skill(self, skill_name: str, level: int = 1):
-        """更新技能"""
-        try:
-            self.experience_bank.update_growth("skills", skill_name, level)
-        except Exception as e:
-            logger.error(f"[异步思考] 更新技能失败: {e}")
-
-    def add_interest(self, interest_name: str):
-        """添加兴趣"""
-        try:
-            self.experience_bank.update_growth("interests", interest_name)
-        except Exception as e:
-            logger.error(f"[异步思考] 添加兴趣失败: {e}")
-
-    def add_view(self, view_description: str):
-        """添加观点"""
-        try:
-            self.experience_bank.update_growth("views", view_description)
-        except Exception as e:
-            logger.error(f"[异步思考] 添加观点失败: {e}")
-
-    def get_user_profile(self, user_id: str):
-        """获取用户资料"""
-        return self.experience_bank.get_user_profile(user_id)
-
-    def get_growth_summary(self):
-        """获取成长摘要"""
-        return self.experience_bank.get_growth_summary()

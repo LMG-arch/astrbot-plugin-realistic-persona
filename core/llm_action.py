@@ -25,6 +25,7 @@ class LLMAction:
         # 使用 get 方法获取可选配置，默认为 None
         self.comment_provider_id = self.config.get("comment_provider_id")
         self.diary_provider_id = self.config.get("diary_provider_id")
+        self.async_think_provider_id = self.config.get("async_think_provider_id", "")
 
         # ModelScope 生图配置
         self.ms_api_key: str | None = self.config.get("api_key")
@@ -926,9 +927,11 @@ class LLMAction:
         Args:
             prompt: 生成思考的提示词
         """
-        # 如果配置了 diary_provider_id 则使用，否则使用默认提供商
+        # 优先使用async_think_provider_id，其次diary_provider_id，最后默认提供商
         provider = None
-        if self.diary_provider_id:
+        if self.async_think_provider_id:
+            provider = self.context.get_provider_by_id(self.async_think_provider_id)
+        if not provider and self.diary_provider_id:
             provider = self.context.get_provider_by_id(self.diary_provider_id)
         if not provider:
             provider = self.context.get_using_provider()
@@ -959,6 +962,48 @@ class LLMAction:
 
         except Exception as e:
             logger.error(f"[思考生成] LLM调用失败：{e}")
+            return None
+
+    async def generate_activity(self, prompt: str) -> str | None:
+        """让大模型根据提示生成一段日常活动描述
+
+        Args:
+            prompt: 生成活动的提示词
+        """
+        # 优先使用async_think_provider_id，其次diary_provider_id，最后默认提供商
+        provider = None
+        if self.async_think_provider_id:
+            provider = self.context.get_provider_by_id(self.async_think_provider_id)
+        if not provider and self.diary_provider_id:
+            provider = self.context.get_provider_by_id(self.diary_provider_id)
+        if not provider:
+            provider = self.context.get_using_provider()
+        if not isinstance(provider, Provider):
+            logger.error("未配置用于文本生成任务的 LLM 提供商")
+            return None
+
+        try:
+            logger.debug(f"[活动生成] 请求提示: {prompt}")
+
+            llm_response = await provider.text_chat(
+                system_prompt="你是一个正在度过日常生活的人。根据给定的情境，描述你此刻正在做的一件日常小事。要求：1.真实自然，贴近生活；2.长度10-30字；3.具体且有画面感；4.直接返回活动内容，不要添加解释。",
+                prompt=prompt,
+            )
+            activity = (llm_response.completion_text or "").strip()
+
+            # 清理返回的内容
+            lines = activity.split("\n")
+            activity = lines[0].strip()
+
+            # 去除可能的引号
+            if activity.startswith('"') and activity.endswith('"'):
+                activity = activity[1:-1]
+
+            logger.info(f"[活动生成] 生成的活动：{activity}")
+            return activity
+
+        except Exception as e:
+            logger.error(f"[活动生成] LLM调用失败：{e}")
             return None
 
     async def generate_nickname(self, prompt: str) -> str | None:

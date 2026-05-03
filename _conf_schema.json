@@ -260,14 +260,14 @@
     "type": "int",
     "default": 3,
     "condition": {"enable_qzone": true},
-    "hint": "每天自动发布说说的次数，建议2-5次较为自然"
+    "hint": "每天自动发布说说的次数，建议2-5次较为自然。系统会根据次数自动在活跃时段(9:00-22:00)内均匀分配时间段，如3次→[9-13, 13-18, 18-22]，5次→[9-11, 11-14, 14-17, 17-19, 19-22]。也支持手动指定时间段覆盖"
   },
   "publish_time_ranges": {
-    "description": "发说说时间段",
+    "description": "自定义发说说时间段",
     "type": "list",
-    "default": ["9-12", "14-18", "19-22"],
+    "default": [],
     "condition": {"enable_qzone": true},
-    "hint": "发说说的时间段列表，格式为'9-12'、'14-18'等，系统会在这些时间段内随机选择时间发布。也支持精确时间如'20:00-20:20'"
+    "hint": "留空则根据发说说次数自动分配时间段（推荐）。如需手动指定，格式为['9-12', '14-18', '19-22']，支持小时范围(如'9-12')或精确时间(如'20:00-20:20')。手动指定的数量应与发说说次数一致"
   },
   "insomnia_probability": {
     "description": "失眠发说说概率",
@@ -333,7 +333,29 @@
     "description": "启用异步思考循环",
     "type": "bool",
     "default": true,
-    "hint": "是否启用后台定时思考、经历累积和成长追踪功能"
+    "hint": "是否启用后台定时思考、经历累积和成长追踪功能。启用后角色会定时产生内心独白、日常活动记录和每日复盘，结合人设、日程、天气、新闻、对话历史等上下文进行深度思考"
+  },
+  "async_think_provider_id": {
+    "description": "异步思考LLM提供商",
+    "type": "string",
+    "_special": "select_provider",
+    "default": "",
+    "condition": {"enable_async_thinking": true},
+    "hint": "用于异步思考（内心独白/深度思考）的LLM提供商。下拉选择已在AstrBot中配置好的LLM提供商，留空则使用默认提供商。建议选择质量较高的模型以获得更自然的思考内容"
+  },
+  "think_interval_minutes": {
+    "description": "思考触发间隔(分钟)",
+    "type": "int",
+    "default": 20,
+    "condition": {"enable_async_thinking": true},
+    "hint": "每隔多少分钟触发一次内心独白/深度思考。思考时会结合人设、当前日程、天气、最近新闻、对话历史和经历银行内容。建议15-30分钟"
+  },
+  "activity_interval_minutes": {
+    "description": "活动记录间隔(分钟)",
+    "type": "int",
+    "default": 25,
+    "condition": {"enable_async_thinking": true},
+    "hint": "每隔多少分钟记录一次日常活动。活动内容由LLM根据当前时间段和人设生成（如"泡了杯咖啡，翻看论文"），而非随机模板。建议20-40分钟"
   },
   
   "_section_profile_auto_update": {
@@ -438,16 +460,18 @@
     "invisible": true
   },
   "comment_provider_id": {
-    "description": "评论生成LLM提供商ID",
+    "description": "评论生成LLM提供商",
     "type": "string",
+    "_special": "select_provider",
     "default": "",
-    "hint": "用于生成QQ空间评论的LLM提供商ID，留空则使用默认提供商"
+    "hint": "用于生成QQ空间评论的LLM提供商。下拉选择已在AstrBot中配置好的LLM提供商，留空则使用默认提供商"
   },
   "diary_provider_id": {
-    "description": "日记生成LLM提供商ID",
+    "description": "日记/说说生成LLM提供商",
     "type": "string",
+    "_special": "select_provider",
     "default": "",
-    "hint": "用于生成日记/说说的LLM提供商ID，留空则使用默认提供商"
+    "hint": "用于生成日记/说说内容和配图提示词的LLM提供商。下拉选择已在AstrBot中配置好的LLM提供商，留空则使用默认提供商"
   },
   "ignore_groups": {
     "description": "忽略的群组列表",

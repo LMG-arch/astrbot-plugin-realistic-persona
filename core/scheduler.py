@@ -33,10 +33,17 @@ class AutoPublish:
 
         # 获取配置
         self.publish_times_per_day = config.get("publish_times_per_day", 1)
-        self.publish_time_ranges = config.get(
-            "publish_time_ranges", ["9-12", "14-18", "19-22"]
-        )
+        self.publish_time_ranges = config.get("publish_time_ranges", [])
         self.insomnia_probability = config.get("insomnia_probability", 0.2)
+
+        # 如果未指定时间段或为空，根据发说说次数自动生成时间段
+        if not self.publish_time_ranges:
+            self.publish_time_ranges = self._auto_generate_time_ranges(
+                self.publish_times_per_day
+            )
+            logger.info(
+                f"[自动发说说] 根据每天{self.publish_times_per_day}次自动生成时间段: {self.publish_time_ranges}"
+            )
 
         # 记录今日发布次数
         self.today_publish_count = 0
@@ -50,6 +57,38 @@ class AutoPublish:
         logger.info(
             f"[自动发说说] 已启动，每天{self.publish_times_per_day}次，时间段{self.publish_time_ranges}"
         )
+
+    @staticmethod
+    def _auto_generate_time_ranges(count: int) -> list[str]:
+        """根据每天发说说次数自动分配时间段
+
+        将活跃时段(9:00-22:00)均分为 count 个区间，每个区间用 'start-end' 格式。
+
+        Args:
+            count: 每天发说说次数
+
+        Returns:
+            时间段列表，如 ['9-13', '13-18', '18-22']
+        """
+        if count <= 0:
+            return []
+        if count == 1:
+            return ["9-22"]
+
+        start_hour = 9
+        end_hour = 22
+        total_hours = end_hour - start_hour
+        # 均分时间段
+        slot_size = total_hours / count
+        ranges = []
+        for i in range(count):
+            s = int(start_hour + i * slot_size)
+            e = int(start_hour + (i + 1) * slot_size)
+            # 确保最后一个段到 end_hour
+            if i == count - 1:
+                e = end_hour
+            ranges.append(f"{s}-{e}")
+        return ranges
 
     def _schedule_comment_check(self):
         """安排定期检查评论并回复的任务"""

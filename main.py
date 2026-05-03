@@ -97,11 +97,76 @@ except ImportError as e:
     logger.warning(f"QQ空间模块未完全加载: {e}")
 
 
+class ThinkingLLM:
+    """轻量级LLM助手，用于异步思考和活动生成，不依赖QQ平台
+
+    Args:
+        context: AstrBot插件上下文
+        provider_id: 指定的LLM提供商ID，留空则使用默认提供商
+    """
+
+    def __init__(self, context, provider_id: str = ""):
+        self.context = context
+        self.provider_id = provider_id
+
+    def _get_provider(self):
+        """获取LLM提供商实例"""
+        provider = None
+        if self.provider_id:
+            provider = self.context.get_provider_by_id(self.provider_id)
+        if not provider:
+            provider = self.context.get_using_provider()
+        return provider
+
+    async def generate_thought(self, prompt: str) -> str | None:
+        """让大模型根据提示生成一段思考或内心独白"""
+        provider = self._get_provider()
+        if not provider:
+            logger.warning("[思考LLM] 未配置LLM提供商，无法生成思考")
+            return None
+        try:
+            resp = await provider.text_chat(
+                system_prompt="你是一个善于思考的人。根据给定的情境，生成一段自然、真实的内心独白。要求：1.真实自然，像真人内心独白；2.长度15-50字；3.结合情境特点；4.直接返回思考内容，不要添加解释。",
+                prompt=prompt,
+            )
+            text = (resp.completion_text or "").strip()
+            # 清理：取第一行，去引号
+            text = text.split("\n")[0].strip()
+            if text.startswith('"') and text.endswith('"'):
+                text = text[1:-1]
+            if text.startswith("「") and text.endswith("」"):
+                text = text[1:-1]
+            return text if text else None
+        except Exception as e:
+            logger.error(f"[思考LLM] 生成思考失败: {e}")
+            return None
+
+    async def generate_activity(self, prompt: str) -> str | None:
+        """让大模型根据提示生成一段日常活动描述"""
+        provider = self._get_provider()
+        if not provider:
+            logger.warning("[思考LLM] 未配置LLM提供商，无法生成活动")
+            return None
+        try:
+            resp = await provider.text_chat(
+                system_prompt="你是一个正在度过日常生活的人。根据给定的情境，描述你此刻正在做的一件日常小事。要求：1.真实自然，贴近生活；2.长度10-30字；3.具体且有画面感；4.直接返回活动内容，不要添加解释。",
+                prompt=prompt,
+            )
+            text = (resp.completion_text or "").strip()
+            text = text.split("\n")[0].strip()
+            if text.startswith('"') and text.endswith('"'):
+                text = text[1:-1]
+            return text if text else None
+        except Exception as e:
+            logger.error(f"[思考LLM] 生成活动失败: {e}")
+            return None
+
+
 @register(
     "astrbot_plugin_realistic_persona",
     "LMG-arch",
     "拟人化角色行为系统：情绪感知、生活模拟、QQ空间日记、AI配图、异步思考、人格演化、人生故事引擎等",
-    "1.13.1",
+    "1.16.0",
     "https://github.com/LMG-arch/astrbot-plugin-realistic-persona.git",
 )
 class Main(Star):
@@ -250,6 +315,9 @@ class Main(Star):
 
         # 初始化异步思考系统
         self.enable_async_thinking = config.get("enable_async_thinking", True)
+        self.async_think_provider_id = config.get("async_think_provider_id", "")
+        self.think_interval_minutes = config.get("think_interval_minutes", 20)
+        self.activity_interval_minutes = config.get("activity_interval_minutes", 25)
         self.thought_engine = None
         self.experience_bank = None
         self.async_thinking_scheduler = None
@@ -260,6 +328,7 @@ class Main(Star):
         self.auto_profile_updater = None  # 自动Profile更新器
         self.life_story_engine = None  # 人生故事引擎
         self.news_getter = None  # 新闻获取器
+        self._thinking_llm = None  # 轻量级思考LLM助手（不依赖QQ）
 
         # 初始化自动Profile更新器
         if self.enable_auto_profile_update:
@@ -301,12 +370,16 @@ class Main(Star):
             self.psychology_engine = PsychologyEngine(psych_dir)
             self.memory_manager = MemoryManager(mem_dir)
             self.timeline_verifier = TimelineVerifier(timeline_dir)
+            # 创建轻量级思考LLM助手（不依赖QQ平台，可独立使用）
+            self._thinking_llm = ThinkingLLM(self.context, self.async_think_provider_id)
             self.async_thinking_scheduler = AsyncThinkingScheduler(
                 self.thought_engine,
                 self.experience_bank,
-                llm_action=None,
-                persona_profile="",
+                llm_action=self._thinking_llm,
+                persona_profile=self.persona_profile,
                 context_provider=self._get_thinking_context,
+                think_interval_minutes=self.think_interval_minutes,
+                activity_interval_minutes=self.activity_interval_minutes,
             )
 
             # 初始化人格演化系统
