@@ -1,0 +1,450 @@
+{
+  "_section_ai_image": {
+    "description": "========== AI绘图配置 ==========",
+    "type": "string",
+    "invisible": true
+  },
+  "api_key": {
+    "description": "ModelScope API密钥",
+    "type": "string",
+    "default": "",
+    "hint": "在ModelScope平台获取的API密钥，用于AI绘图功能"
+  },
+  "ms_model": {
+    "description": "ModelScope绘图模型",
+    "type": "string",
+    "default": "iic/sdxl-turbo",
+    "hint": "ModelScope上的文生图模型名称，如：iic/sdxl-turbo, stable-diffusion-xl-base-1.0"
+  },
+  "openai_model": {
+    "description": "OpenAI绘图模型",
+    "type": "string",
+    "default": "dall-e-3",
+    "hint": "OpenAI绘图模型名称，如：dall-e-3, dall-e-2"
+  },
+  "aliyun_model": {
+    "description": "阿里云绘图模型",
+    "type": "string",
+    "default": "wanx-v1",
+    "hint": "阿里云通义万相绘图模型名称，如：wanx-v1"
+  },
+  "api_url": {
+    "description": "API基础URL",
+    "type": "string",
+    "default": "https://api-inference.modelscope.cn/",
+    "hint": "ModelScope API的基础地址"
+  },
+  "provider": {
+    "description": "图片生成服务商",
+    "type": "string",
+    "default": "ms",
+    "options": ["ms", "modelscope", "openai", "aliyun"],
+    "labels": ["ModelScope", "ModelScope(完整)", "OpenAI DALL-E", "阿里云"]
+  },
+  "backup_providers": {
+    "description": "备用图片生成服务商",
+    "type": "list",
+    "default": ["openai", "aliyun"],
+    "hint": "当主服务商不可用时，按顺序尝试这些备用服务商。支持：ms/modelscope/openai/aliyun"
+  },
+  "openai_api_key": {
+    "description": "OpenAI API密钥",
+    "type": "string",
+    "default": "",
+    "hint": "OpenAI账户的API密钥，用于DALL-E绘图功能"
+  },
+  "openai_api_url": {
+    "description": "OpenAI API基础URL",
+    "type": "string",
+    "default": "https://api.openai.com/v1",
+    "hint": "OpenAI API的基础地址，可使用代理服务"
+  },
+  "aliyun_api_key": {
+    "description": "阿里云API密钥",
+    "type": "string",
+    "default": "",
+    "hint": "阿里云通义万相API密钥，用于AI绘图功能"
+  },
+  "aliyun_api_url": {
+    "description": "阿里云API基础URL",
+    "type": "string",
+    "default": "https://dashscope.aliyuncs.com/api/v1",
+    "hint": "阿里云通义万相API的基础地址"
+  },
+  "size": {
+    "description": "默认图片尺寸",
+    "type": "string",
+    "default": "1080x1920",
+    "options": ["1080x1920", "1920x1080", "1024x1024", "512x512"],
+    "labels": ["竖屏(1080x1920)", "横屏(1920x1080)", "方形(1024x1024)", "小方形(512x512)"]
+  },
+  "image_forbidden_rules": {
+    "description": "绘画禁止规则",
+    "type": "text",
+    "default": "★★★绝对禁止规则：画面中禁止出现任何男性角色、男生、男人、男孩等。只能有女性主角一人，不要添加其他人物。",
+    "hint": "生成图片时的强制禁止规则，会被添加到绘画提示词中。留空则不添加任何禁止规则。"
+  },
+  "enable_image_generation_detection": {
+    "description": "启用图像生成检测",
+    "type": "bool",
+    "default": true,
+    "hint": "自动检测LLM返回的绘画提示词但没有实际调用绘图工具的情况，并自动调用绘图工具"
+  },
+  
+  "_section_emotion": {
+    "description": "========== 情绪感知配置 ==========",
+    "type": "string",
+    "invisible": true
+  },
+  "enable_emotion_detection": {
+    "description": "启用情绪感知",
+    "type": "bool",
+    "default": true,
+    "hint": "自动检测用户情绪并作出相应反馈"
+  },
+  "enable_auto_selfie": {
+    "description": "启用自动自拍",
+    "type": "bool",
+    "default": false,
+    "condition": {"enable_emotion_detection": true},
+    "hint": "根据情绪自动生成AI自拍照片"
+  },
+  "selfie_trigger_chance": {
+    "description": "自拍触发概率",
+    "type": "float",
+    "default": 0.3,
+    "condition": {"enable_auto_selfie": true},
+    "hint": "当检测到符合条件的情绪时，触发自拍的概率(0-1)，建议0.2-0.5"
+  },
+  "enable_proactive_messages": {
+    "description": "启用主动消息",
+    "type": "bool",
+    "default": false,
+    "hint": "是否启用根据上下文主动发送消息的功能"
+  },
+  "idle_greeting_delay": {
+    "description": "空闲问候延迟(秒)",
+    "type": "int",
+    "default": 600,
+    "condition": {"enable_proactive_messages": true},
+    "hint": "用户空闲多久后发送问候消息"
+  },
+  "enable_context_events": {
+    "description": "启用上下文事件",
+    "type": "bool",
+    "default": true,
+    "hint": "检测对话事件并主动回应"
+  },
+  "llm_tool_enabled": {
+    "description": "启用LLM工具调用",
+    "type": "bool",
+    "default": true,
+    "hint": "是否允许AI通过工具调用生成图片"
+  },
+  
+  "_section_life_simulation": {
+    "description": "========== 生活模拟配置 ==========",
+    "type": "string",
+    "invisible": true
+  },
+  "enable_life_simulation": {
+    "description": "启用生活模拟",
+    "type": "bool",
+    "default": true,
+    "hint": "模拟真实的日常生活状态、日程安排和情绪变化"
+  },
+  "persona_name": {
+    "description": "角色名称",
+    "type": "string",
+    "default": "她",
+    "condition": {"enable_life_simulation": true},
+    "hint": "AI角色的称呼，用于日程生成等场景"
+  },
+  "persona_profile": {
+    "description": "插件人设配置",
+    "type": "text",
+    "default": "",
+    "hint": "插件独立的人设设定，优先级高于系统人设。留空则使用系统配置的人设。\n格式示例：你是一个24岁的女生，居住在南京，上海大学计算机科学系大四在读..."
+  },
+  "schedule_hour": {
+    "description": "日程生成时间(小时)",
+    "type": "int",
+    "default": 7,
+    "condition": {"enable_life_simulation": true},
+    "hint": "每天几点开始生成当天的日程安排(0-23)"
+  },
+  "news_hour": {
+    "description": "新闻学习时间(小时)",
+    "type": "int",
+    "default": 7,
+    "condition": {"enable_life_simulation": true},
+    "hint": "每天几点开始获取当天早间新闻(0-23)，默认早上7点"
+  },
+  "weather_location": {
+    "description": "天气查询位置",
+    "type": "string",
+    "default": "",
+    "condition": {"enable_life_simulation": true},
+    "hint": "用于查询天气信息的城市名称，如：Shanghai、Beijing。需启用天气工具以获取实时数据"
+  },
+  "news_topics": {
+    "description": "关注话题列表",
+    "type": "list",
+    "default": ["科技", "生活方式", "兴趣相关话题"],
+    "condition": {"enable_life_simulation": true},
+    "hint": "角色感兴趣并会关注的新闻话题。需启用联网工具以获取真实新闻"
+  },
+  "schedule_prompt": {
+    "description": "日程生成提示词",
+    "type": "text",
+    "default": "你是{persona_name}，{persona_profile}。\n今天是{today}。\n当地天气：{weather}。\n\n请直接输出今天的详细生活安排：\n\n1. 今日穿搭：根据人设、当地天气和今天的活动，描述具体穿着（上衣、下装、鞋子、外套/配饰等），必须符合天气情况、角色性格和身份\n2. 早上（6:00-9:00）：起床时间、洗漱、早餐、出门准备等具体活动\n3. 上午（9:00-12:00）：主要活动（工作/上课/其他），具体在做什么\n4. 中午（12:00-14:00）：午餐地点和内容、午休安排\n5. 下午（14:00-18:00）：下午的具体安排和活动\n6. 傍晚（18:00-20:00）：晚餐、休闲活动\n7. 晚上（20:00-23:00）：娱乐、学习、社交等活动\n8. 睡前（23:00-24:00）：洗漱、放松、睡觉准备\n\n重要：直接输出日程内容，不要添加任何确认、回复或解释性的话。用口语化表达，贴近真实人类生活，不要提到AI。每个时段1-2句话即可。",
+    "condition": {"enable_life_simulation": true},
+    "hint": "生成日程时的系统提示词。支持变量：{persona_name} {persona_profile} {today} {weather}"
+  },
+  "news_prompt": {
+    "description": "新闻获取提示词",
+    "type": "text",
+    "default": "联网搜索{today}早间新闻，关注{topics}，列出3条标题+简述。",
+    "condition": {"enable_life_simulation": true},
+    "hint": "获取新闻时的系统提示词。支持变量：{today} {topics}"
+  },
+  "enable_news_getter": {
+    "description": "启用新闻获取模块",
+    "type": "bool",
+    "default": true,
+    "condition": {"enable_life_simulation": true},
+    "hint": "是否使用独立的新闻获取模块（支持多源容错），而非仅依赖LLM联网功能"
+  },
+  "news_online_fetch": {
+    "description": "启用联网获取新闻",
+    "type": "bool",
+    "default": true,
+    "condition": {"enable_news_getter": true},
+    "hint": "是否主动从多个新闻源获取实时新闻数据"
+  },
+  "today_schedule_display": {
+    "description": "当前日程预览",
+    "type": "text",
+    "default": "未生成日程，请等待系统自动生成或手动触发",
+    "readonly": true,
+    "condition": {"enable_life_simulation": true},
+    "hint": "展示当天已生成的日程安排，此项为只读，仅供预览"
+  },
+  
+  "_section_qzone": {
+    "description": "========== QQ空间功能配置 ==========",
+    "type": "string",
+    "invisible": true
+  },
+  "enable_qzone": {
+    "description": "启用QQ空间功能",
+    "type": "bool",
+    "default": false,
+    "hint": "是否启用QQ空间日记、评论、表白墙等功能"
+  },
+  "publish_cron": {
+    "description": "[已废弃]自动发说说Cron表达式",
+    "type": "string",
+    "default": "",
+    "condition": {"enable_qzone": true},
+    "hint": "此配置项已废弃，请使用publish_times_per_day和publish_time_ranges"
+  },
+  "publish_times_per_day": {
+    "description": "每天发说说次数",
+    "type": "int",
+    "default": 3,
+    "condition": {"enable_qzone": true},
+    "hint": "每天自动发布说说的次数，建议2-5次较为自然"
+  },
+  "publish_time_ranges": {
+    "description": "发说说时间段",
+    "type": "list",
+    "default": ["9-12", "14-18", "19-22"],
+    "condition": {"enable_qzone": true},
+    "hint": "发说说的时间段列表，格式为'9-12'、'14-18'等，系统会在这些时间段内随机选择时间发布。也支持精确时间如'20:00-20:20'"
+  },
+  "insomnia_probability": {
+    "description": "失眠发说说概率",
+    "type": "float",
+    "default": 0.15,
+    "condition": {"enable_qzone": true},
+    "hint": "晚上23:00-02:00之间随机发失眠说说的概率（0-1之间），0表示不发，0.15表示15%概率，建议0.1-0.3"
+  },
+  "diary_max_msg": {
+    "description": "日记最大消息数",
+    "type": "int",
+    "default": 200,
+    "condition": {"enable_qzone": true},
+    "hint": "生成日记时最多读取的群聊消息条数"
+  },
+  "history_max_rounds": {
+    "description": "对话历史最大轮数",
+    "type": "int",
+    "default": 10,
+    "hint": "在与LLM交互时保留的最大对话轮数，超出部分将被压缩或丢弃以节省token"
+  },
+  "enable_history_compression": {
+    "description": "启用历史对话压缩",
+    "type": "bool",
+    "default": true,
+    "hint": "是否启用对话历史自动压缩功能，将长对话历史精简以节省token"
+  },
+  "history_compression_threshold": {
+    "description": "历史压缩阈值(字符数)",
+    "type": "int",
+    "default": 2000,
+    "condition": {"enable_history_compression": true},
+    "hint": "当对话历史超过此字符数时自动触发压缩机制"
+  },
+  "diary_user_id": {
+    "description": "优先使用的对话用户ID",
+    "type": "string",
+    "default": "",
+    "condition": {"enable_qzone": true},
+    "hint": "发说说时优先从这个用户的私聊对话历史生成内容，留空则从群聊读取。格式：QQ号"
+  },
+  "diary_prompt": {
+    "description": "日记生成提示",
+    "type": "text",
+    "default": "写作风格：\n- 用口语化、随意的语气，像朋友圈那样轻松\n- 可以包含 Emoji 表情增加生动性\n- 只写 2-3 句话，简洁明了\n- 不要长篇大论，不要流水账式的叙述\n- 可以是分享心情、小感慨、有趣的事、即时感受、思考、或者emo等\n\n示例：\n- “今天天气超好，在公园晒了一下午的太阳🌞”\n- “终于学会了那道难题，感觉自己还是挺聪明的呀😏”\n- “晚风很舒服，散步回家的路上看到了超美的晚霞✨”",
+    "condition": {"enable_qzone": true},
+    "hint": "生成QQ空间日记/说说时的补充提示词，定义写作风格和示例"
+  },
+  "comment_prompt": {
+    "description": "评论生成提示",
+    "type": "text",
+    "default": "请根据帖子内容生成一条简短的评论。要求：\n- 口语化、自然随意\n- 1句话以内，简洁有趣\n- 可以使用emoji表达情绪\n- 不要太正式或客套",
+    "condition": {"enable_qzone": true},
+    "hint": "生成评论内容时使用的系统提示"
+  },
+  
+  "_section_async_thinking": {
+    "description": "========== 异步思考系统配置 ==========",
+    "type": "string",
+    "invisible": true
+  },
+  "enable_async_thinking": {
+    "description": "启用异步思考循环",
+    "type": "bool",
+    "default": true,
+    "hint": "是否启用后台定时思考、经历累积和成长追踪功能"
+  },
+  
+  "_section_profile_auto_update": {
+    "description": "========== 个人资料自动管理 ==========",
+    "type": "string",
+    "invisible": true
+  },
+  "enable_auto_profile_update": {
+    "description": "启用自动修改昵称和签名",
+    "type": "bool",
+    "default": false,
+    "hint": "根据情绪变化自动修改 QQ 昵称和个性签名"
+  },
+  "enable_auto_nickname": {
+    "description": "启用自动修改昵称",
+    "type": "bool",
+    "default": false,
+    "condition": {"enable_auto_profile_update": true},
+    "hint": "是否自动修改 QQ 昵称（可能需要频繁更新）"
+  },
+  "enable_auto_signature": {
+    "description": "启用自动修改签名",
+    "type": "bool",
+    "default": true,
+    "condition": {"enable_auto_profile_update": true},
+    "hint": "是否自动修改 QQ 个性签名（推荐开启）"
+  },
+  "enable_auto_avatar": {
+    "description": "启用自动生成头像",
+    "type": "bool",
+    "default": false,
+    "condition": {"enable_auto_profile_update": true},
+    "hint": "是否根据情绪自动生成头像并更换（需要 AI 绘图 API）"
+  },
+  "profile_update_cooldown": {
+    "description": "更新冷却时间(秒)",
+    "type": "int",
+    "default": 1800,
+    "condition": {"enable_auto_profile_update": true},
+    "hint": "两次更新之间的最小间隔时间，默认 30 分钟（1800秒）"
+  },
+  "emotion_change_threshold": {
+    "description": "情绪变化阈值",
+    "type": "float",
+    "default": 0.6,
+    "condition": {"enable_auto_profile_update": true},
+    "hint": "触发更新的情绪强度阈值 (0-1)，越高越不容易触发"
+  },
+  
+  "_section_life_story": {
+    "description": "========== 人生故事引擎配置 ==========\n",
+    "type": "string",
+    "invisible": true
+  },
+  "enable_life_story": {
+    "description": "启用人生故事引擎",
+    "type": "bool",
+    "default": true,
+    "condition": {"enable_async_thinking": true},
+    "hint": "基于原始人设自动构建完整的人生经历线，最小化Token消耗同时保证高质量扮演"
+  },
+  "life_story_update_interval": {
+    "description": "更新间隔(天)",
+    "type": "int",
+    "default": 3,
+    "condition": {"enable_life_story": true},
+    "hint": "人生故事多久更新一次，单位为天"
+  },
+  "life_story_collect_days": {
+    "description": "收集经历范围(天)",
+    "type": "int",
+    "default": 7,
+    "condition": {"enable_life_story": true},
+    "hint": "生成故事时收集最近多少天的经历数据"
+  },
+  "life_story_context_max_length": {
+    "description": "精简上下文最大长度",
+    "type": "int",
+    "default": 200,
+    "condition": {"enable_life_story": true},
+    "hint": "LLM对话中注入的精简上下文最大字符数，范围100-500"
+  },
+  "life_story_cache_days": {
+    "description": "上下文缓存有效期(天)",
+    "type": "int",
+    "default": 7,
+    "condition": {"enable_life_story": true},
+    "hint": "生成的精简上下文缓存多久才需要重新生成"
+  },
+  
+  "_section_advanced": {
+    "description": "========== 高级配置 ==========",
+    "type": "string",
+    "invisible": true
+  },
+  "comment_provider_id": {
+    "description": "评论生成LLM提供商ID",
+    "type": "string",
+    "default": "",
+    "hint": "用于生成QQ空间评论的LLM提供商ID，留空则使用默认提供商"
+  },
+  "diary_provider_id": {
+    "description": "日记生成LLM提供商ID",
+    "type": "string",
+    "default": "",
+    "hint": "用于生成日记/说说的LLM提供商ID，留空则使用默认提供商"
+  },
+  "ignore_groups": {
+    "description": "忽略的群组列表",
+    "type": "list",
+    "default": [],
+    "hint": "不从这些群组读取消息生成日记，格式为群号列表"
+  },
+  "pillowmd_style_dir": {
+    "description": "Pillowmd样式目录",
+    "type": "string",
+    "default": "",
+    "hint": "自定义的Pillowmd样式目录路径，留空则使用默认样式"
+  }
+}

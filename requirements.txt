@@ -1,0 +1,4 @@
+aiohttp>=3.8.0
+pillowmd>=0.7.0
+apscheduler>=3.10.0
+pydantic>=2.0.0
