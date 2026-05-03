@@ -25,6 +25,7 @@ class AsyncThinkingScheduler:
         llm_action=None,
         on_weather_changed: Callable | None = None,
         persona_profile: str = "",
+        context_provider: Callable | None = None,
     ):
         """
         初始化调度器
@@ -35,6 +36,7 @@ class AsyncThinkingScheduler:
             llm_action: LLM动作实例，用于大模型思考
             on_weather_changed: 天气变化时的回调函数
             persona_profile: 人格描述，用于指导大模型生成符合人设的思考
+            context_provider: 异步回调函数，返回 dict 包含 schedule/news/recent_conversations/recent_experiences
         """
         # 使用传入的引擎实例
         self.thought_engine = thought_engine
@@ -47,6 +49,7 @@ class AsyncThinkingScheduler:
 
         # 回调函数
         self.on_weather_changed = on_weather_changed
+        self.context_provider = context_provider
 
         # 缓存当前天气
         self.current_weather: str | None = None
