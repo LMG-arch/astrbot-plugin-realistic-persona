@@ -2,7 +2,7 @@
 拟人化角色行为系统插件 (Realistic Persona Plugin)
 整合了情绪感知、生活模拟、QQ空间日记、AI配图等功能
 
-版本: v1.20.1
+版本: v1.20.2
 作者: LMG-arch
 最后更新: 2025-05-13
 符合AstrBot插件开发完全指南规范
@@ -204,7 +204,7 @@ class ThinkingLLM:
     "astrbot_plugin_realistic_persona",
     "LMG-arch",
     "拟人化角色行为系统：情绪感知、生活模拟、QQ空间日记、AI配图、异步思考、人格演化、人生故事引擎等",
-    "1.20.1",
+    "1.20.2",
     "https://github.com/LMG-arch/astrbot-plugin-realistic-persona.git",
 )
 class Main(Star):
@@ -238,8 +238,8 @@ class Main(Star):
 
         # 存储当前请求的event（用于工具调用解析）
         self._current_event = None
-        # 待执行的Profile更新（异步思考生成但需要event才能执行的更新）
-        self._pending_profile_update = None
+        # 缓存bot对象，用于异步思考触发时直接执行QQ API调用
+        self._cached_bot = None
 
         # 检查版本
         if not VersionComparator.compare_version(VERSION, "4.1.0") >= 0:
@@ -1113,9 +1113,10 @@ class Main(Star):
             logger.error(f"[自动更新Profile] 失败: {e}", exc_info=True)
 
     async def _on_thought_for_profile_update(self, thought: str):
-        """异步思考生成后触发Profile更新
+        """异步思考生成后直接触发Profile更新
 
         通过分析思考内容的情绪来更新个人资料，让角色的变化更自然。
+        使用缓存的bot对象直接执行QQ API调用，不依赖用户对话。
 
         Args:
             thought: 思考内容文本
@@ -1132,8 +1133,6 @@ class Main(Star):
             return
 
         try:
-            # EmotionAnalyzer and EmotionType are imported at module level
-
             # 分析思考内容的情绪
             emotion = EmotionAnalyzer.analyze_emotion(thought)
             if not emotion:
@@ -1157,42 +1156,97 @@ class Main(Star):
             if intensity < self.auto_profile_updater.threshold:
                 return
 
+            if not self._check_frequency_limit():
+                return
+
             logger.info(
                 f"[Profile更新] 异步思考触发 - 情绪: {emotion.value} (强度: {intensity:.2f})"
             )
 
-            # 使用一个虚拟事件对象来触发更新
-            # 因为思考不是用户消息触发的，我们只需要触发签名等不需要event的更新
-            # 对于需要event的更新（如修改QQ资料），需要有bot对象
-            # 这里只更新本地状态，不执行实际的QQ API调用
-            if not self._check_frequency_limit():
+            # 检查是否有缓存的bot对象用于直接执行API调用
+            bot = self._cached_bot
+            if not bot:
+                logger.debug("[Profile更新] 无缓存bot对象，跳过QQ API调用")
                 return
 
-            # 生成新的签名（不需要event对象）
+            context_data = (
+                f"情绪: {emotion.value}, 强度: {intensity}, 人设: {self.persona_name}"
+            )
+
+            # 直接更新昵称
+            if (
+                self.auto_profile_updater.enable_nickname
+                and self.auto_profile_updater._can_update("nickname")
+            ):
+                try:
+                    new_nickname = await self.auto_profile_updater._generate_nickname(
+                        emotion.value,
+                        intensity,
+                        llm_action=self.llm if self.enable_auto_avatar else None,
+                        context_data=context_data,
+                    )
+                    if new_nickname != self.auto_profile_updater.state.get(
+                        "current_nickname"
+                    ):
+                        await bot.set_qq_profile(nickname=new_nickname)
+                        self.auto_profile_updater.state["current_nickname"] = (
+                            new_nickname
+                        )
+                        self.auto_profile_updater._record_update("nickname")
+                        logger.info(f"[Profile更新] 异步思考更新昵称: {new_nickname}")
+                except Exception as e:
+                    logger.debug(f"[Profile更新] 异步思考更新昵称失败: {e}")
+
+            # 直接更新签名
             if (
                 self.auto_profile_updater.enable_signature
                 and self.auto_profile_updater._can_update("signature")
             ):
-                new_signature = self.auto_profile_updater._generate_signature(
-                    emotion.value, intensity
-                )
-                if new_signature != self.auto_profile_updater.state.get(
-                    "current_signature"
-                ):
-                    # 思考触发只能更新本地状态，无法调用QQ API
-                    # 将待更新的状态保存，下次有event时执行
-                    self._pending_profile_update = {
-                        "type": "signature",
-                        "value": new_signature,
-                        "emotion": emotion.value,
-                        "intensity": intensity,
-                        "timestamp": time.time(),
-                    }
-                    self.auto_profile_updater.state["current_signature"] = new_signature
-                    self.auto_profile_updater._record_update("signature")
-                    logger.info(
-                        f"[Profile更新] 异步思考生成新签名: {new_signature}（待下次用户互动时应用）"
+                try:
+                    new_signature = await self.auto_profile_updater._generate_signature(
+                        emotion.value,
+                        intensity,
+                        context=context_data,
+                        llm_action=self.llm if self.enable_auto_avatar else None,
                     )
+                    if new_signature != self.auto_profile_updater.state.get(
+                        "current_signature"
+                    ):
+                        await bot.set_self_longnick(longNick=new_signature)
+                        self.auto_profile_updater.state["current_signature"] = (
+                            new_signature
+                        )
+                        self.auto_profile_updater._record_update("signature")
+                        logger.info(f"[Profile更新] 异步思考更新签名: {new_signature}")
+                except Exception as e:
+                    logger.debug(f"[Profile更新] 异步思考更新签名失败: {e}")
+
+            # 直接更新头像
+            if (
+                self.enable_auto_avatar
+                and self.auto_profile_updater.enable_avatar
+                and self.auto_profile_updater._can_update("avatar")
+                and self.llm
+            ):
+                try:
+                    avatar_prompt = self.auto_profile_updater._generate_avatar_prompt(
+                        emotion.value, intensity
+                    )
+                    logger.info(
+                        f"[Profile更新] 异步思考生成头像，提示词: {avatar_prompt}"
+                    )
+                    image_url = await self.llm._request_image_with_fallback(
+                        avatar_prompt, "1024x1024"
+                    )
+                    if image_url:
+                        await bot.set_qq_avatar(file=image_url)
+                        self.auto_profile_updater.state["last_avatar_url"] = image_url
+                        self.auto_profile_updater._record_update("avatar")
+                        logger.info("[Profile更新] 异步思考更新头像成功")
+                except Exception as e:
+                    logger.debug(f"[Profile更新] 异步思考更新头像失败: {e}")
+
+            self.auto_profile_updater._save_state()
 
         except Exception as e:
             logger.debug(f"[Profile更新] 异步思考触发失败: {e}")
@@ -4255,21 +4309,8 @@ class Main(Star):
         # 根据角色自身回复的情绪自动更新个人资料
         # 角色是一个完整的人，有自己的喜怒哀乐，profile应反映它自身的心情
         if self.auto_profile_updater and isinstance(event, AiocqhttpMessageEvent):
-            # 应用异步思考期间生成的待执行Profile更新
-            if self._pending_profile_update:
-                try:
-                    pending = self._pending_profile_update
-                    # 只处理30分钟内的待更新（避免过期）
-                    if time.time() - pending.get("timestamp", 0) < 1800:
-                        if pending["type"] == "signature":
-                            await event.bot.set_self_longnick(longNick=pending["value"])
-                            logger.info(
-                                f"[Profile更新] 已应用异步思考生成的签名: {pending['value']}"
-                            )
-                    self._pending_profile_update = None
-                except Exception as e:
-                    logger.debug(f"[Profile更新] 应用待执行更新失败: {e}")
-                    self._pending_profile_update = None
+            # 缓存bot对象，供异步思考回调直接使用
+            self._cached_bot = event.bot
 
             try:
                 bot_emotion = EmotionAnalyzer.analyze_emotion(text)

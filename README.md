@@ -716,6 +716,13 @@ pip install -r requirements.txt
   - **降低QZone ctx未初始化警告频率**：评论检查每10分钟运行一次，ctx未初始化是正常状态（QZone未启用时），将warning降级为debug避免日志刷屏
 
 
+- v1.20.2: 异步思考直接执行Profile更新
+  - **缓存bot对象**：在用户消息处理时缓存`event.bot`，供异步思考回调直接使用
+  - **思考触发直接执行**：异步思考回调（`_on_thought_for_profile_update`）不再只更新本地状态等待用户互动，而是通过缓存的bot直接调用QQ API更新昵称、签名和头像
+  - **移除pending机制**：删除`_pending_profile_update`延迟执行逻辑，思考时决定更新就立即执行
+  - **昵称/签名/头像全覆盖**：思考触发现在支持更新全部三种资料（之前只支持签名）
+
+
 ## 致谢
 
 本插件整合了以下插件的功能：
