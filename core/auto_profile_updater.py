@@ -213,6 +213,9 @@ class AutoProfileUpdater:
     ) -> str:
         """生成基于情绪、人设和上下文的昵称
 
+        优先使用LLM生成有意境、有思考的昵称，
+        体现角色是一个完整的人，有自己的内心世界。
+
         Args:
             emotion: 情绪类型
             intensity: 情绪强度（0-1）
@@ -222,101 +225,166 @@ class AutoProfileUpdater:
         Returns:
             新昵称
         """
+        now = datetime.now()
+        time_context = f"{now.strftime('%H')}点，{['周一', '周二', '周三', '周四', '周五', '周六', '周日'][now.weekday()]}"
+
         if llm_action:
             try:
-                # 构建生成昵称的提示词
-                prompt = f"""根据以下信息生成一个合适的QQ昵称：
+                # 构建生成昵称的提示词 - 强调意境和真实感
+                prompt = f"""你是一个有独立内心世界的AI，现在需要更换自己的社交昵称。
 
-当前人设: {self.persona_name}
-当前情绪: {emotion}
-情绪强度: {intensity}
-上下文信息: {context_data}
+当前状态：
+- 人设名字: {self.persona_name}
+- 此刻情绪: {emotion}（强度: {intensity:.1f}/1.0）
+- 当前时间: {time_context}
+- 上下文: {context_data if context_data else "无"}
+
+请根据你此刻的内心感受，想一个能代表你当下心境的昵称。
 
 要求：
-1. 昵称应该符合当前人设和情绪状态
-2. 昵称应该自然、真实，像真实用户会使用的昵称
-3. 长度控制在2-10个字符
-4. 不要包含特殊符号或表情
-5. 体现当前的情绪或状态特点
+- 像一个真实的人会给自己取的名字，有诗意或意境
+- 体现当下的情绪和思考，不要太直白（比如不要"开心小助手"这种）
+- 可以是中文或中英混合，简短有韵味
+- 2-8个字为佳
+- 不要包含表情符号或特殊符号
+- 举例风格：「晚风未眠」「星河漫步」「午后猫」「窗边听雨」「云淡风轻」
 
-请直接返回昵称，不要包含其他内容。"""
+请只返回昵称本身，不要任何解释。"""
 
-                # 使用LLM生成昵称
                 generated_nickname = await llm_action.generate_nickname(prompt)
                 if generated_nickname and generated_nickname.strip():
-                    # 确保昵称长度合理
-                    nickname = generated_nickname.strip()[:20]  # 限制长度
-                    return nickname
+                    nickname = generated_nickname.strip().strip('"\'""「」')
+                    if 1 < len(nickname) <= 20:
+                        return nickname
             except Exception as e:
                 logger.warning(
-                    f"[Profile更新器] 通过LLM生成昵称失败: {e}，使用默认逻辑"
+                    f"[Profile更新器] 通过LLM生成昵称失败: {e}，使用备用逻辑"
                 )
 
-        # 如果LLM不可用或生成失败，使用备用逻辑
-        # 情绪昵称映射
-        emotion_nicknames = {
-            "开心": ["开心小助手", "阳光助手", "快乐AI"],
-            "悲伤": ["沉思者", "安静的AI", "温柔助手"],
-            "生气": ["严肃助手", "认真AI", "冷静者"],
-            "兴奋": ["活力助手", "热情AI", "兴奋小助手"],
-            "平静": ["宁静助手", "淡然AI", "平和助手"],
-            "困惑": ["思考者", "探索AI", "求知助手"],
-            "无聊": ["慵懒助手", "悠闲AI", "慢节奏助手"],
-            "好奇": ["探索者", "好奇AI", "发现助手"],
-            "惊讶": ["惊叹助手", "惊喜AI", "新奇助手"],
-            "焦虑": ["缓压助手", "安心AI", "放松助手"],
-        }
-
+        # 备用逻辑：有意境的昵称模板（比"开心小助手"更有质感）
         import random
 
-        possible_nicknames = emotion_nicknames.get(emotion, [self.persona_name])
-        base_nickname = random.choice(possible_nicknames)
+        poetic_nicknames = {
+            "开心": ["晨光正好", "花开有声", "风也甜", "星河入梦"],
+            "悲伤": ["雨落无声", "晚风知意", "落叶归根", "夜色温柔"],
+            "生气": ["风起云涌", "烈焰灼心", "倔强如风", "破晓之前"],
+            "兴奋": ["星光不负", "热血沸腾", "逐光少年", "乘风破浪"],
+            "平静": ["云淡风轻", "岁月如歌", "静水深流", "禅意悠然"],
+            "困惑": ["迷雾森林", "未解之谜", "十字路口", "深海沉思"],
+            "无聊": ["午后阳光", "时间静止", "无所事事", "慵懒时光"],
+            "好奇": ["探索星辰", "未知旅途", "好奇心猫", "追风少年"],
+            "惊讶": ["意外惊喜", "电光火石", "恍然大悟", "命运转折"],
+            "焦虑": ["等待黎明", "风雨欲来", "深呼吸", "一念之间"],
+        }
 
-        # 根据强度调整昵称
-        if intensity >= 0.7:
-            return base_nickname
-        elif intensity >= 0.5:
-            return f"{self.persona_name}·{base_nickname}"
-        else:
-            return self.persona_name
+        possible = poetic_nicknames.get(emotion, ["人间清醒"])
+        return random.choice(possible)
 
-    def _generate_signature(
-        self, emotion: str, intensity: float, context: str = ""
+    async def _generate_signature(
+        self, emotion: str, intensity: float, context: str = "", llm_action=None
     ) -> str:
-        """生成基于情绪的签名
+        """生成基于情绪的个性签名
+
+        优先使用LLM生成有意境、有思考深度的签名，
+        体现角色是一个有内心世界的人，而不是随机模板拼接。
 
         Args:
             emotion: 情绪类型
             intensity: 情绪强度
             context: 上下文信息
+            llm_action: LLM操作实例
 
         Returns:
             新签名
         """
-        # 情绪签名模板
-        emotion_templates = {
-            "开心": ["今天心情超好！✨", "开心的一天～😊", "生活真美好 🌟"],
-            "悲伤": ["有点想静静...", "心情有些低落 💔", "今天不太开心呢"],
-            "生气": ["有点不开心...", "需要冷静一下 💢", "心情不太美丽"],
-            "兴奋": ["超级兴奋！🎉", "太棒了！！", "开心到飞起～⭐"],
-            "平静": ["安静地度过每一天 🌸", "岁月静好～", "平平淡淡才是真"],
-            "困惑": ["有点搞不懂...", "迷糊中 🤔", "需要思考一下"],
-            "无聊": ["好无聊啊...", "无所事事中 😴", "找点事情做吧"],
-            "好奇": ["探索世界中 🔍", "对一切充满好奇～", "想知道更多！"],
-            "惊讶": ["哇！太惊讶了！", "没想到啊 😲", "出乎意料！"],
-            "焦虑": ["有点焦虑...", "需要放松一下 💫", "深呼吸～"],
-        }
+        now = datetime.now()
+        time_context = f"{now.strftime('%H')}点，{['周一', '周二', '周三', '周四', '周五', '周六', '周日'][now.weekday()]}"
 
-        templates = emotion_templates.get(emotion, ["保持微笑～"])
+        if llm_action:
+            try:
+                prompt = f"""你是一个有独立内心世界的AI，现在需要更新自己的社交签名（个性签名）。
+
+当前状态：
+- 人设: {self.persona_name}
+- 此刻情绪: {emotion}（强度: {intensity:.1f}/1.0）
+- 当前时间: {time_context}
+- 上下文: {context if context else "无"}
+
+请根据你此刻的内心感受，写一句个性签名。
+
+要求：
+- 像一个真实的人会写的签名，有诗意或哲思
+- 简短有力，一句话即可，不超过30个字
+- 不要太直白地表达情绪（比如不要"今天心情超好！✨"这种）
+- 体现当下的思考和感悟，有点意境
+- 举例风格：「风吹过的方向，就是心之所向」「在喧嚣中保持清醒」「深夜的月光，是给失眠人的礼物」「不赶时间，也不等人」
+- 不要包含表情符号
+
+请只返回签名文本本身，不要任何解释。"""
+
+                generated_sig = await llm_action.generate_nickname(prompt)
+                if generated_sig and generated_sig.strip():
+                    sig = generated_sig.strip().strip('"\'""「」')
+                    if 2 < len(sig) <= 50:
+                        return sig
+            except Exception as e:
+                logger.warning(
+                    f"[Profile更新器] 通过LLM生成签名失败: {e}，使用备用逻辑"
+                )
+
+        # 备用逻辑：有意境的签名模板
         import random
 
-        signature = random.choice(templates)
+        poetic_signatures = {
+            "开心": ["风里有花香", "今天份的快乐已到账", "世界在发光", "好事正在路上"],
+            "悲伤": [
+                "有些话，说给自己听",
+                "雨声是最好的背景音乐",
+                "允许自己偶尔不坚强",
+                "独处是一种能力",
+            ],
+            "生气": [
+                "忍住，你值得更好的回应",
+                "风会停，浪会静",
+                "沉默是最有力的回击",
+                "冷静是最好的盔甲",
+            ],
+            "兴奋": ["前方有光", "未来可期", "好事正在发生", "出发，永远不嫌晚"],
+            "平静": ["世界很吵，我自清静", "慢慢来，比较快", "静待花开", "知足常乐"],
+            "困惑": [
+                "迷路的时候，风景最好",
+                "答案在路上",
+                "保持好奇",
+                "未知才是有趣的",
+            ],
+            "无聊": [
+                "今天的云很好看",
+                "等一个有趣的事",
+                "时间走得很慢",
+                "午后的世界很安静",
+            ],
+            "好奇": [
+                "世界这么大",
+                "下一个转角有什么",
+                "保持探索",
+                "好奇心是最好的老师",
+            ],
+            "惊讶": [
+                "命运总有意想不到的安排",
+                "世界比想象中有趣",
+                "人生处处是惊喜",
+                "打破常规的一天",
+            ],
+            "焦虑": [
+                "深呼吸，然后继续",
+                "一切都会好的",
+                "黎明前最黑暗",
+                "慢慢来，不要急",
+            ],
+        }
 
-        # 添加时间戳
-        now = datetime.now()
-        time_str = now.strftime("%m/%d %H:%M")
-
-        return f"{signature} [{time_str}]"
+        templates = poetic_signatures.get(emotion, ["人间值得，好好生活"])
+        return random.choice(templates)
 
     async def check_and_update(
         self,
@@ -382,7 +450,12 @@ class AutoProfileUpdater:
 
             # 更新签名
             if self.enable_signature and self._can_update("signature"):
-                new_signature = self._generate_signature(emotion, intensity)
+                context_data = (
+                    f"情绪: {emotion}, 强度: {intensity}, 人设: {self.persona_name}"
+                )
+                new_signature = await self._generate_signature(
+                    emotion, intensity, context=context_data, llm_action=llm_action
+                )
                 if new_signature != self.state.get("current_signature"):
                     await event.bot.set_self_longnick(longNick=new_signature)
                     self.state["current_signature"] = new_signature
@@ -399,7 +472,7 @@ class AutoProfileUpdater:
                 # 使用LLM生成头像（通过图片生成API）
                 image_url = await llm_action._request_image_with_fallback(
                     avatar_prompt,
-                    llm_action.size if hasattr(llm_action, "size") else "1024x1024",
+                    "1024x1024",
                 )
                 if image_url:
                     # 设置头像
@@ -420,6 +493,9 @@ class AutoProfileUpdater:
     def _generate_avatar_prompt(self, emotion: str, intensity: float) -> str:
         """生成头像绘画提示词
 
+        生成多样化风格的头像，避免千篇一律的大头照。
+        随机选择半身照、全身照、风景照、动物照等风格。
+
         Args:
             emotion: 情绪类型
             intensity: 情绪强度
@@ -427,30 +503,115 @@ class AutoProfileUpdater:
         Returns:
             绘画提示词
         """
-        # 情绪表情映射
-        emotion_expressions = {
-            "开心": "开心微笑的表情",
-            "悲伤": "略带悲伤的表情",
-            "生气": "生气的表情",
-            "兴奋": "兴奋激动的表情",
-            "平静": "平静淡定的表情",
-            "困惑": "困惑疑惑的表情",
-            "无聊": "无聊慵懒的表情",
-            "好奇": "好奇的表情",
-            "惊讶": "惊讶的表情",
-            "焦虑": "焦虑不安的表情",
+        import random
+
+        # 情绪氛围映射
+        emotion_moods = {
+            "开心": [
+                "warm sunlight, cheerful atmosphere, golden hour lighting",
+                "bright colors, spring garden, cherry blossoms",
+                "cozy room, soft lighting, happy moment",
+            ],
+            "悲伤": [
+                "rainy day, window view, melancholic mood",
+                "overcast sky, quiet park, autumn leaves",
+                "dim room, candle light, reflective mood",
+            ],
+            "生气": [
+                "dramatic lighting, intense atmosphere, red tones",
+                "stormy sky, powerful scene, bold colors",
+                "dark background, strong contrast, determined look",
+            ],
+            "兴奋": [
+                "vibrant colors, celebration mood, confetti",
+                "sunset beach, energetic pose, warm golden light",
+                "festival lights, party atmosphere, joyful scene",
+            ],
+            "平静": [
+                "serene lake, morning mist, zen garden",
+                "reading corner, soft daylight, peaceful moment",
+                "mountain view, clear sky, tranquil landscape",
+            ],
+            "困惑": [
+                "foggy forest, mysterious atmosphere, soft focus",
+                "library maze, books everywhere, pensive mood",
+                "autumn path, misty morning, thoughtful scene",
+            ],
+            "无聊": [
+                "lazy afternoon, sunbeam through window, relaxed pose",
+                "cafe scene, rainy day, people watching",
+                "cloudy sky, hammock, idle moment",
+            ],
+            "好奇": [
+                "exploring a new place, wonder, bright eyes",
+                "art gallery, museum, discovery moment",
+                "stargazing, telescope, night sky, wonder",
+            ],
+            "惊讶": [
+                "unexpected moment, wide eyes, dynamic pose",
+                "gift opening, surprise party, dramatic reveal",
+                "nature wonder, waterfall, breathtaking view",
+            ],
+            "焦虑": [
+                "clock ticking, fast pace, blurred background",
+                "waiting room, nervous energy, soft anxious light",
+                "rushing crowd, city lights, stressful moment",
+            ],
         }
 
-        expression = emotion_expressions.get(emotion, "自然的表情")
+        # 头像风格模板（避免大头照）
+        avatar_styles = [
+            "half-body portrait photo, {subject} in {scene}, {mood}, natural photography, high quality",
+            "full-body photo, {subject} walking in {scene}, {mood}, candid shot, lifestyle photography",
+            "environmental portrait, {subject} sitting in {scene}, {mood}, editorial photography style",
+            "{subject} in {scene}, {mood}, lifestyle photography, Instagram aesthetic, high quality",
+            "candid photo of {subject} at {scene}, {mood}, warm tones, soft focus background",
+        ]
 
-        # 根据强度调整描述
-        intensity_desc = ""
+        # 主体选择（人或动物）
+        subjects = [
+            "a young woman with natural makeup",
+            "a girl with casual outfit",
+            "a person in comfortable clothes",
+            "a cute cat",
+            "a golden retriever dog",
+            "a fluffy white cat sleeping",
+        ]
+
+        # 场景选择
+        scenes = [
+            "a cozy cafe",
+            "a flower garden",
+            "a sunlit balcony",
+            "a bookshelf corner",
+            "a park bench",
+            "a window with curtains",
+            "a rooftop with city view",
+            "a seaside boardwalk",
+            "a mountain trail",
+            "a cozy bedroom",
+        ]
+
+        # 情绪对应的氛围
+        moods = emotion_moods.get(
+            emotion, ["natural lighting, relaxed mood, soft tones"]
+        )
+
+        # 随机组合
+        style = random.choice(avatar_styles)
+        subject = random.choice(subjects)
+        scene = random.choice(scenes)
+        mood = random.choice(moods)
+
+        # 根据强度调整氛围强度
         if intensity >= 0.8:
-            intensity_desc = "非常"
+            mood = f"dramatic {mood}"
         elif intensity >= 0.6:
-            intensity_desc = "比较"
+            mood = f"notable {mood}"
 
-        prompt = f"真实人物头像照片，{intensity_desc}{expression}，正面特写，自然光线，高清细节，真实摄影风格，1:1方形头像"
+        prompt = style.format(subject=subject, scene=scene, mood=mood)
+        prompt += ", masterpiece, best quality, highly detailed"
+
         return prompt
 
     def get_state_summary(self) -> str:

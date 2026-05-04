@@ -53,5 +53,6 @@ cache/
 .env.*.local
 
 # AstrBot specific
+.astrbot
 *.db
 *.db-journal

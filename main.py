@@ -2,9 +2,9 @@
 拟人化角色行为系统插件 (Realistic Persona Plugin)
 整合了情绪感知、生活模拟、QQ空间日记、AI配图等功能
 
-版本: v1.20.0
+版本: v1.20.1
 作者: LMG-arch
-最后更新: 2025-05-04
+最后更新: 2025-05-13
 符合AstrBot插件开发完全指南规范
 """
 
@@ -204,7 +204,7 @@ class ThinkingLLM:
     "astrbot_plugin_realistic_persona",
     "LMG-arch",
     "拟人化角色行为系统：情绪感知、生活模拟、QQ空间日记、AI配图、异步思考、人格演化、人生故事引擎等",
-    "1.20.0",
+    "1.20.1",
     "https://github.com/LMG-arch/astrbot-plugin-realistic-persona.git",
 )
 class Main(Star):
@@ -956,13 +956,13 @@ class Main(Star):
         """独立评论检查的回调函数"""
         try:
             if not hasattr(self, "operator") or not self.operator:
-                logger.warning("[独立评论检查] operator 未初始化，跳过")
+                logger.debug("[独立评论检查] operator 未初始化，跳过")
                 return
             if not hasattr(self.operator, "qzone") or not self.operator.qzone:
-                logger.warning("[独立评论检查] operator.qzone 未初始化，跳过")
+                logger.debug("[独立评论检查] operator.qzone 未初始化，跳过")
                 return
             if not hasattr(self.operator.qzone, "ctx") or not self.operator.qzone.ctx:
-                logger.warning("[独立评论检查] operator.qzone.ctx 未初始化，跳过")
+                logger.debug("[独立评论检查] operator.qzone.ctx 未初始化，跳过")
                 return
             logger.debug("[独立评论检查] 开始检查新评论并回复")
             await self.operator.auto_reply_to_comments()
