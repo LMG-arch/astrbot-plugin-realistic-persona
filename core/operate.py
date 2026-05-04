@@ -93,7 +93,7 @@ class PostOperator:
             logger.error("获取不到用户ID")
             return []
 
-        if int(target_id) in self.config["ignore_users"]:  # 忽略用户
+        if int(target_id) in self.config.get("ignore_users", []):  # 忽略用户
             logger.warning(f"已忽略用户（{target_id}）的QQ空间")
             return []
 
@@ -133,7 +133,9 @@ class PostOperator:
             if isinstance(data, dict):
                 if code := data.get("code"):
                     if code in [-10031]:
-                        self.config["ignore_users"].append(int(target_id))
+                        ignore_users = self.config.get("ignore_users", [])
+                        ignore_users.append(int(target_id))
+                        self.config["ignore_users"] = ignore_users
                         logger.warning(
                             f"已将用户（{target_id}）添加到忽略列表，下次不再处理该用户的空间"
                         )

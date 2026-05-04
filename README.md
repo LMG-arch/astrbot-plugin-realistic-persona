@@ -723,6 +723,15 @@ pip install -r requirements.txt
   - **昵称/签名/头像全覆盖**：思考触发现在支持更新全部三种资料（之前只支持签名）
 
 
+- v1.20.3: 全面审计配置项——清理死代码、废弃配置和隐藏Bug
+  - **移除废弃配置`publish_cron`**：从`_conf_schema.json`中删除已废弃的Cron表达式配置项（早已改用`publish_times_per_day`+`publish_time_ranges`），避免用户困惑
+  - **清理`main.py`中6个死属性赋值**：`publish_cron`、`diary_max_msg`、`diary_user_id`、`diary_prompt`、`comment_prompt`、`enable_auto_reply_comments`这6个配置项在`main.py`中被读入`self.*`属性但从未使用——实际由`core/llm_action.py`、`core/operate.py`、`core/scheduler.py`通过`config.get()`直接读取。删除冗余赋值保持代码整洁
+  - **修复`ignore_users`缺失和崩溃**：`core/operate.py`使用`self.
+config["ignore_users"]`直接访问但该配置项未声明在`_conf_schema.json`中，且没有默认值——用户首次使用时会`KeyError`崩溃。添加schema声明+使用`.get()`安全访问
+  - **修复默认值不一致**：`core/llm_action.py`中`ms_model`默认值`iic/sdxl-turbo`→`Qwen/Qwen-Image`、`size`默认值`1080x1920`→`1024x1024`、`api_url`默认值`api.modelscope.com`→`api-inference.modelscope.cn`；`core/scheduler.py`中`insomnia_probability`默认值`0.2`→`0.15`——统一与schema声明一致
+  - **审计结果**：73个配置项全部可正常工作，1个废弃配置已移除，5个冗余赋值已清理，1个隐藏崩溃已修复，默认值全部对齐
+
+
 ## 致谢
 
 本插件整合了以下插件的功能：

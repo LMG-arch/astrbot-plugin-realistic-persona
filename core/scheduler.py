@@ -34,7 +34,7 @@ class AutoPublish:
         # 获取配置
         self.publish_times_per_day = config.get("publish_times_per_day", 3)
         self.publish_time_ranges = config.get("publish_time_ranges", [])
-        self.insomnia_probability = config.get("insomnia_probability", 0.2)
+        self.insomnia_probability = config.get("insomnia_probability", 0.15)
 
         # 如果未指定时间段或为空，或者时间段数量与发说说次数不匹配，自动重新生成
         if (

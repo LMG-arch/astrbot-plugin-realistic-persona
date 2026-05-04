@@ -271,13 +271,6 @@
     "default": false,
     "hint": "是否启用QQ空间日记、评论、表白墙等功能"
   },
-  "publish_cron": {
-    "description": "[已废弃]自动发说说Cron表达式",
-    "type": "string",
-    "default": "",
-    "condition": {"enable_qzone": true},
-    "hint": "此配置项已废弃，请使用publish_times_per_day和publish_time_ranges"
-  },
   "publish_times_per_day": {
     "description": "每天发说说次数",
     "type": "int",
@@ -529,6 +522,12 @@
     "type": "list",
     "default": [],
     "hint": "不从这些群组读取消息生成日记，格式为群号列表"
+  },
+  "ignore_users": {
+    "description": "忽略的用户列表",
+    "type": "list",
+    "default": [],
+    "hint": "不处理这些用户的QQ空间（获取说说失败时自动添加），格式为QQ号列表"
   },
   "pillowmd_style_dir": {
     "description": "Pillowmd样式目录",

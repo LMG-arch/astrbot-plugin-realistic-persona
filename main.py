@@ -2,7 +2,7 @@
 拟人化角色行为系统插件 (Realistic Persona Plugin)
 整合了情绪感知、生活模拟、QQ空间日记、AI配图等功能
 
-版本: v1.20.2
+版本: v1.20.3
 作者: LMG-arch
 最后更新: 2025-05-13
 符合AstrBot插件开发完全指南规范
@@ -204,7 +204,7 @@ class ThinkingLLM:
     "astrbot_plugin_realistic_persona",
     "LMG-arch",
     "拟人化角色行为系统：情绪感知、生活模拟、QQ空间日记、AI配图、异步思考、人格演化、人生故事引擎等",
-    "1.20.2",
+    "1.20.3",
     "https://github.com/LMG-arch/astrbot-plugin-realistic-persona.git",
 )
 class Main(Star):
@@ -291,7 +291,6 @@ class Main(Star):
 
         # ========== QQ空间配置 ==========
         self.enable_qzone = config.get("enable_qzone", False)
-        self.publish_cron = config.get("publish_cron", "")
         self.publish_times_per_day = config.get(
             "publish_times_per_day", 3
         )  # 每天发说说次数
@@ -301,11 +300,8 @@ class Main(Star):
         self.insomnia_probability = config.get(
             "insomnia_probability", 0.2
         )  # 失眠发说说概率
-        self.diary_max_msg = config.get("diary_max_msg", 200)
-        self.diary_user_id = config.get("diary_user_id", "")  # 优先使用的对话用户ID
-        self.diary_prompt = config.get("diary_prompt", "")
-        self.comment_prompt = config.get("comment_prompt", "")
-        self.enable_auto_reply_comments = config.get("enable_auto_reply_comments", True)
+        # diary_max_msg, diary_user_id, diary_prompt, comment_prompt, enable_auto_reply_comments
+        # 由 core/*.py 模块通过 config.get() 直接读取，无需在此缓存
 
         # ========== 个人资料自动更新配置 ==========
         self.enable_auto_profile_update = config.get(

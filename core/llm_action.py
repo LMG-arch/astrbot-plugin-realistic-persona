@@ -31,10 +31,10 @@ class LLMAction:
         self.ms_api_key: str | None = self.config.get("api_key")
         self.ms_api_url: str = self.config.get(
             "api_url",
-            "https://api.modelscope.com/api/",
+            "https://api-inference.modelscope.cn/",
         )
-        self.ms_model: str = self.config.get("ms_model", "iic/sdxl-turbo")
-        self.ms_size: str = self.config.get("size", "1080x1920")
+        self.ms_model: str = self.config.get("ms_model", "Qwen/Qwen-Image")
+        self.ms_size: str = self.config.get("size", "1024x1024")
         self.weather_location: str = self.config.get("weather_location", "")
 
     async def _request_image_with_fallback(
