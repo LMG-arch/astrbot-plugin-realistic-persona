@@ -2,7 +2,7 @@
 拟人化角色行为系统插件 (Realistic Persona Plugin)
 整合了情绪感知、生活模拟、QQ空间日记、AI配图等功能
 
-版本: v1.19.4
+版本: v1.20.0
 作者: LMG-arch
 最后更新: 2025-05-04
 符合AstrBot插件开发完全指南规范
@@ -204,7 +204,7 @@ class ThinkingLLM:
     "astrbot_plugin_realistic_persona",
     "LMG-arch",
     "拟人化角色行为系统：情绪感知、生活模拟、QQ空间日记、AI配图、异步思考、人格演化、人生故事引擎等",
-    "1.19.4",
+    "1.20.0",
     "https://github.com/LMG-arch/astrbot-plugin-realistic-persona.git",
 )
 class Main(Star):
@@ -263,6 +263,13 @@ class Main(Star):
         self.selfie_trigger_chance = config.get("selfie_trigger_chance", 0.3)
         self.enable_proactive_messages = config.get("enable_proactive_messages", False)
         self.idle_greeting_delay = config.get("idle_greeting_delay", 600)
+        self.enable_proactive_sharing = config.get("enable_proactive_sharing", False)
+        self.proactive_share_interval_minutes = config.get(
+            "proactive_share_interval_minutes", 120
+        )
+        self.proactive_share_time_ranges = config.get(
+            "proactive_share_time_ranges", "9-12,14-18,19-22"
+        )
         self.enable_context_events = config.get("enable_context_events", True)
         self.llm_tool_enabled = config.get("llm_tool_enabled", True)
 
@@ -639,6 +646,31 @@ class Main(Star):
                 except Exception as e:
                     logger.error(f"启动主动消息调度器失败: {e}")
 
+            # 启动主动分享调度器
+            if self.enable_proactive_messages and self.enable_proactive_sharing:
+                try:
+                    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+                    from apscheduler.triggers.interval import IntervalTrigger
+
+                    self._proactive_share_scheduler = AsyncIOScheduler()
+                    self._proactive_share_scheduler.add_job(
+                        func=self._check_and_share_life,
+                        trigger=IntervalTrigger(
+                            minutes=self.proactive_share_interval_minutes
+                        ),
+                        name="proactive_share",
+                        max_instances=1,
+                    )
+                    self._proactive_share_scheduler.start()
+                    logger.info(
+                        f"[主动分享] 已启动，每{self.proactive_share_interval_minutes}分钟检查，"
+                        f"时间段: {self.proactive_share_time_ranges}"
+                    )
+                except Exception as e:
+                    logger.error(f"启动主动分享调度器失败: {e}")
+            else:
+                self._proactive_share_scheduler = None
+
             # 初始化QQ空间相关设置
             if self.enable_qzone and QZONE_AVAILABLE:
                 # 实例化pillowmd样式
@@ -692,6 +724,15 @@ class Main(Star):
             logger.info(f"  • 新闻学习时间：每天{self.news_hour}点")
 
         logger.info(f"QQ空间功能: {qzone_status}")
+        proactive_status = "开启" if self.enable_proactive_messages else "关闭"
+        logger.info(f"主动消息: {proactive_status}")
+        if self.enable_proactive_messages:
+            logger.info(f"  • 空闲问候延迟: {self.idle_greeting_delay}秒")
+            if self.enable_proactive_sharing:
+                logger.info(
+                    f"  • 主动分享: 开启（每{self.proactive_share_interval_minutes}分钟，"
+                    f"时间段: {self.proactive_share_time_ranges}）"
+                )
         logger.info("=" * 50)
 
     async def terminate(self):
@@ -714,6 +755,17 @@ class Main(Star):
                     logger.debug("主动消息调度器已停止")
                 except Exception as e:
                     logger.debug(f"停止主动消息调度器失败: {e}")
+
+            # 停止主动分享调度器
+            if (
+                hasattr(self, "_proactive_share_scheduler")
+                and self._proactive_share_scheduler
+            ):
+                try:
+                    self._proactive_share_scheduler.shutdown(wait=False)
+                    logger.debug("主动分享调度器已停止")
+                except Exception as e:
+                    logger.debug(f"停止主动分享调度器失败: {e}")
 
             # 清空情绪上下文
             if hasattr(self, "emotion_contexts"):
@@ -2029,6 +2081,349 @@ class Main(Star):
         except Exception as e:
             logger.debug(f"获取对话历史上下文失败: {e}")
         return []
+
+    # ========== 主动分享功能 ==========
+
+    async def _check_and_share_life(self):
+        """定时检查是否在允许的时间段内，如果是则生成并发送主动分享"""
+        try:
+            now = datetime.now()
+            current_hour = now.hour
+
+            # 检查是否在允许的时间段内
+            if not self._is_in_share_time_range(current_hour):
+                logger.debug(
+                    f"[主动分享] 当前时间 {current_hour}:00 不在分享时间段内，跳过"
+                )
+                return
+
+            # 检查是否有目标会话
+            target_sessions = self.config.get("proactive_target_sessions", "")
+            if not target_sessions:
+                logger.debug("[主动分享] 未配置目标会话白名单，跳过")
+                return
+
+            allowed = [s.strip() for s in target_sessions.split(",") if s.strip()]
+            if not allowed:
+                return
+
+            # 为每个目标会话生成并发送分享
+            for session_id in allowed:
+                try:
+                    share_content = await self._generate_proactive_share(session_id)
+                    if not share_content:
+                        logger.debug(f"[主动分享] 未能为会话 {session_id} 生成分享内容")
+                        continue
+
+                    # 发送消息
+                    from astrbot.api.event import MessageChain
+
+                    chain = MessageChain([Plain(share_content)])
+                    try:
+                        sent = await self.context.send_message(session_id, chain)
+                        if sent:
+                            logger.info(
+                                f"[主动分享] 已发送到会话 {session_id}: {share_content[:50]}..."
+                            )
+                        else:
+                            logger.warning(f"[主动分享] 消息未发送到会话 {session_id}")
+                    except Exception as e:
+                        logger.warning(f"[主动分享] 发送到会话 {session_id} 失败: {e}")
+                except Exception as e:
+                    logger.error(f"[主动分享] 处理会话 {session_id} 失败: {e}")
+
+        except Exception as e:
+            logger.error(f"[主动分享] 执行失败: {e}", exc_info=True)
+
+    def _is_in_share_time_range(self, hour: int) -> bool:
+        """检查当前小时是否在允许的分享时间段内
+
+        Args:
+            hour: 当前小时（0-23）
+
+        Returns:
+            是否在允许的分享时间段内
+        """
+        try:
+            ranges = self.proactive_share_time_ranges
+            if not ranges:
+                return True  # 未配置则默认允许
+
+            for range_str in ranges.split(","):
+                range_str = range_str.strip()
+                if not range_str:
+                    continue
+                if "-" in range_str:
+                    start, end = range_str.split("-")
+                    start_hour = int(start.strip())
+                    end_hour = int(end.strip())
+                    if start_hour <= hour < end_hour:
+                        return True
+        except Exception as e:
+            logger.debug(f"[主动分享] 解析时间段失败: {e}")
+        return False
+
+    async def _generate_proactive_share(self, session_id: str) -> str:
+        """生成主动分享内容，结合日程、人设、对话历史和当前时间
+
+        Args:
+            session_id: 目标会话ID
+
+        Returns:
+            分享内容字符串，失败返回空字符串
+        """
+        try:
+            now = datetime.now()
+            context_parts = []
+            persona_profile = await self._get_persona_profile()
+
+            # 1. 当前日程 - 获取当前时间段的活动
+            try:
+                schedule_info = await self._maybe_generate_schedule(now)
+                if schedule_info:
+                    current_activity = self._get_current_schedule_item(
+                        schedule_info, now
+                    )
+                    if current_activity:
+                        context_parts.append(f"[当前日程活动：{current_activity}]")
+                    else:
+                        context_parts.append(
+                            f"[今日日程（参考）：{schedule_info[:200]}]"
+                        )
+            except Exception as e:
+                logger.debug(f"[主动分享] 获取日程失败: {e}")
+
+            # 2. 天气信息
+            try:
+                if hasattr(self, "_weather_cache") and self._weather_cache:
+                    weather_info = self._weather_cache.get("data")
+                    if weather_info:
+                        context_parts.append(f"[当前天气：{weather_info}]")
+            except Exception as e:
+                logger.debug(f"[主动分享] 获取天气失败: {e}")
+
+            # 3. 最近对话历史
+            try:
+                if self.experience_bank:
+                    recent_convs = self.experience_bank.get_recent_conversations(
+                        session_id, limit=5
+                    )
+                    if recent_convs:
+                        conv_summaries = []
+                        for conv in recent_convs[-3:]:
+                            user_msg = conv.get("user_message", "")
+                            bot_msg = conv.get("bot_response", "")
+                            if user_msg:
+                                conv_summaries.append(f"用户说: {user_msg[:50]}")
+                            if bot_msg:
+                                conv_summaries.append(f"我说: {bot_msg[:50]}")
+                        if conv_summaries:
+                            context_parts.append(
+                                f"[最近对话：{'; '.join(conv_summaries)}]"
+                            )
+            except Exception as e:
+                logger.debug(f"[主动分享] 获取对话历史失败: {e}")
+
+            # 4. 经历银行中的最近经历和技能
+            try:
+                if self.experience_bank:
+                    recent_events = self.experience_bank.get_recent_events(limit=3)
+                    if recent_events:
+                        event_texts = [
+                            e.get("description", "")
+                            for e in recent_events
+                            if e.get("description")
+                        ]
+                        if event_texts:
+                            context_parts.append(
+                                f"[最近经历：{'；'.join(event_texts[:3])}]"
+                            )
+            except Exception as e:
+                logger.debug(f"[主动分享] 获取经历失败: {e}")
+
+            # 5. 人格演化状态
+            try:
+                if (
+                    hasattr(self, "personality_evolution")
+                    and self.personality_evolution
+                ):
+                    evo_status = self.personality_evolution.get_status()
+                    if evo_status:
+                        style = evo_status.get("expression_style", {})
+                        if style:
+                            vocab = style.get("vocabulary_level", 0.5)
+                            humor = style.get("humor_level", 0.5)
+                            context_parts.append(
+                                f"[性格特点：词汇水平{vocab:.1f}，幽默感{humor:.1f}]"
+                            )
+            except Exception as e:
+                logger.debug(f"[主动分享] 获取人格演化失败: {e}")
+
+            # 6. 当前时间和时间段
+            time_desc = self._get_time_description(now)
+
+            context_info = "\n".join(context_parts) if context_parts else ""
+
+            # 构建主动分享的提示词
+            share_prompt = (
+                f"你是{self.persona_name}，{persona_profile}。\n"
+                f"现在是{now.strftime('%Y年%m月%d日 %H:%M')}，{time_desc}。\n"
+                f"{context_info}\n\n"
+                "你正在社交平台上主动分享自己的生活状态。\n"
+                "请生成一条自然的生活分享/状态更新，要求：\n"
+                "1. 像真人发朋友圈/空间一样自然随意\n"
+                "2. 结合当前时间、正在做的事情（根据日程）、天气、心情\n"
+                "3. 如果有最近的对话或经历，可以自然地提及或呼应\n"
+                "4. 表达当下的真实感受和状态，不要太刻意\n"
+                "5. 控制在30字以内，可以带表情\n"
+                "6. 不要提及你是AI或机器人\n"
+                "7. 不要每次都用相同的句式，内容要有变化\n"
+                "8. 可以是感慨、吐槽、分享趣事、表达心情等多种形式\n\n"
+                "生活分享内容："
+            )
+
+            # 尝试通过LLM生成分享内容
+            provider_id = self._get_provider_id()
+            if provider_id and self.context and hasattr(self.context, "llm_generate"):
+                try:
+                    resp = await self.context.llm_generate(
+                        chat_provider_id=provider_id,
+                        prompt=share_prompt,
+                    )
+                    generated_share = (resp.completion_text or "").strip()
+                    if generated_share:
+                        logger.info(f"[主动分享] LLM生成分享: {generated_share}")
+                        return generated_share
+                except Exception as e:
+                    logger.debug(f"[主动分享] LLM生成失败: {e}")
+
+            # 回退到基于日程的简单分享
+            return self._build_fallback_share(now)
+
+        except Exception as e:
+            logger.error(f"[主动分享] 生成分享内容失败: {e}")
+            return ""
+
+    def _get_current_schedule_item(self, schedule_text: str, now: datetime) -> str:
+        """从日程文本中提取当前时间段的活动
+
+        Args:
+            schedule_text: 完整的日程文本
+            now: 当前时间
+
+        Returns:
+            当前时间段的活动描述，未找到返回空字符串
+        """
+        try:
+            current_hour = now.hour
+
+            # 根据当前时间确定时间段关键词
+            time_keywords = {
+                range(6, 9): ["早上", "起床", "早", "晨"],
+                range(9, 12): ["上午", "上课", "上班", "工作", "课"],
+                range(12, 14): ["中午", "午餐", "午饭", "午休"],
+                range(14, 18): ["下午", "下午"],
+                range(18, 20): ["傍晚", "晚餐", "晚饭"],
+                range(20, 23): ["晚上", "晚", "夜"],
+                range(23, 24): ["睡前", "睡觉", "夜"],
+                range(0, 6): ["深夜", "凌晨", "失眠"],
+            }
+
+            keywords = []
+            for hour_range, kws in time_keywords.items():
+                if current_hour in hour_range:
+                    keywords = kws
+                    break
+
+            if not keywords:
+                return ""
+
+            # 按行搜索包含当前时间段关键词的行
+            lines = schedule_text.split("\n")
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                for kw in keywords:
+                    if kw in line:
+                        # 去掉前缀编号如 "1. "、"上午（9:00-12:00）："
+                        cleaned = re.sub(r"^\d+\.\s*", "", line)
+                        cleaned = re.sub(r"^[^：:]*[：:]\s*", "", cleaned)
+                        return cleaned[:100]
+
+        except Exception as e:
+            logger.debug(f"[主动分享] 提取当前日程失败: {e}")
+        return ""
+
+    def _get_time_description(self, now: datetime) -> str:
+        """获取当前时间的文字描述"""
+        hour = now.hour
+        if 6 <= hour < 9:
+            return "清晨时光"
+        elif 9 <= hour < 12:
+            return "上午时段"
+        elif 12 <= hour < 14:
+            return "中午时分"
+        elif 14 <= hour < 18:
+            return "下午时光"
+        elif 18 <= hour < 20:
+            return "傍晚时分"
+        elif 20 <= hour < 23:
+            return "晚上"
+        else:
+            return "深夜"
+
+    def _build_fallback_share(self, now: datetime) -> str:
+        """LLM不可用时的回退分享内容
+
+        Args:
+            now: 当前时间
+
+        Returns:
+            基于时间的简单分享文本
+        """
+        hour = now.hour
+        fallbacks = {
+            "morning": [
+                "早安~新的一天开始了☀️",
+                "起床啦，今天也要加油💪",
+                "早上好呀，吃早餐了没？",
+                "新的一天，新的开始🌈",
+            ],
+            "noon": [
+                "午饭时间到！干饭人干饭魂🍚",
+                "中午好~该休息一下了",
+                "午饭吃了啥？🤔",
+            ],
+            "afternoon": [
+                "下午有点犯困呢😴",
+                "下午好~继续努力中",
+                "喝杯下午茶☕",
+            ],
+            "evening": [
+                "晚上好~忙碌的一天快结束了",
+                "终于到晚上了，放松一下🌙",
+                "晚饭后散个步🚶",
+            ],
+            "night": [
+                "夜深了，还不想睡呢🌙",
+                "深夜emo时间...",
+                "晚安前再刷一会儿手机📱",
+            ],
+        }
+
+        if 6 <= hour < 12:
+            period = "morning"
+        elif 12 <= hour < 14:
+            period = "noon"
+        elif 14 <= hour < 18:
+            period = "afternoon"
+        elif 18 <= hour < 22:
+            period = "evening"
+        else:
+            period = "night"
+
+        return random.choice(fallbacks[period])
 
     async def _get_available_sessions(self) -> list[dict]:
         """通过AstrBot数据库API获取已知会话列表

@@ -136,6 +136,29 @@
     "condition": {"enable_proactive_messages": true},
     "hint": "指定接收主动消息的会话ID（格式：platform_id:message_type:session_id），多个用逗号分隔。留空则对所有会话生效。可使用 /sessions 命令查看可用会话列表"
   },
+  "enable_proactive_sharing": {
+    "description": "启用主动分享",
+    "type": "bool",
+    "default": false,
+    "condition": {"enable_proactive_messages": true},
+    "hint": "启用后角色会根据当前日程、天气、对话历史和人设，主动分享生活状态（如'刚上完课好累'、'在图书馆看论文呢'），让角色更像真人"
+  },
+  "proactive_share_interval_minutes": {
+    "description": "主动分享间隔(分钟)",
+    "type": "int",
+    "default": 120,
+    "min": 30,
+    "max": 480,
+    "condition": {"enable_proactive_sharing": true},
+    "hint": "每隔多少分钟主动分享一次生活状态，建议60-180分钟"
+  },
+  "proactive_share_time_ranges": {
+    "description": "主动分享时间段",
+    "type": "string",
+    "default": "9-12,14-18,19-22",
+    "condition": {"enable_proactive_sharing": true},
+    "hint": "允许主动分享的时间段，格式如'9-12,14-18,19-22'，不在时间段内不会分享"
+  },
   "enable_context_events": {
     "description": "启用上下文事件",
     "type": "bool",
