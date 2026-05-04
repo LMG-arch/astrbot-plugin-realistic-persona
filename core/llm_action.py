@@ -112,6 +112,7 @@ class LLMAction:
         headers = {
             "Authorization": f"Bearer {self.ms_api_key}",
             "Content-Type": "application/json",
+            "X-ModelScope-Async-Mode": "true",
         }
         payload = {
             "model": self.ms_model,
