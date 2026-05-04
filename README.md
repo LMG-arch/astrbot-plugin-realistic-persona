@@ -678,15 +678,14 @@ pip install -r requirements.txt
   - **修复空返回日志缺失**：LLM返回空内容时增加warning日志，便于排查思考质量降级的原因
 
 
+- v1.19.2: 修复异步思考调度器导致插件加载失败
+  - **修复`AsyncThinkingScheduler.__init__()`缺少`on_thought_generated`参数**：`read_file`工具缓存导致源文件显示与磁盘实际内容不一致，该参数从未真正写入磁盘。通过AST解析和直接Python写入修复
+  - **支持异步回调**：`on_thought_generated`回调现在正确处理`async`函数（使用`asyncio.iscoroutine()`检测），确保`_on_thought_for_profile_update`的异步人格更新逻辑正常执行
 - v1.19.3: 支持独立配置自动回复QQ空间评论（不依赖自动发说说）
   - **新增`enable_auto_reply_comments`配置开关**：在配置文件中可独立控制是否自动回复QQ空间评论，默认开启
   - **评论检查独立于自动发说说**：即使未开启自动发说说（`publish_times_per_day=0`），只要开启`enable_auto_reply_comments`，评论检查定时器仍会独立运行，每10分钟检查一次
   - **兼容已有自动发说说**：当`AutoPublish`已创建时，评论检查由`AutoPublish`统一管理（遵循`enable_auto_reply_comments`配置），不会重复创建
   - **完整资源清理**：独立评论检查调度器在插件卸载时正确关闭
-- v1.19.2: 修复异步思考调度器导致插件加载失败
-
-  - **修复`AsyncThinkingScheduler.__init__()`缺少`on_thought_generated`参数**：`read_file`工具缓存导致源文件显示与磁盘实际内容不一致，该参数从未真正写入磁盘。通过AST解析和直接Python写入修复
-  - **支持异步回调**：`on_thought_generated`回调现在正确处理`async`函数（使用`asyncio.iscoroutine()`检测），确保`_on_thought_for_profile_update`的异步人格更新逻辑正常执行
 - v1.19.4: 修复ModelScope绘图API异步模式兼容
   - **修复ModelScope绘图400错误**：`core/llm_action.py`的`_request_modelscope()`缺少`X-ModelScope-Async-Mode: true`请求头，导致ModelScope API返回400错误。该header是ModelScope异步模式（task_id轮询模式）的必需参数
 
