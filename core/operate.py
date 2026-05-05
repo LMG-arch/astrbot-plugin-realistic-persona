@@ -23,6 +23,7 @@ class PostOperator:
         db: PostDB,
         llm: LLMAction,
         style,
+        local_data_manager,
     ):
         self.context = context
         self.config = config
@@ -30,6 +31,7 @@ class PostOperator:
         self.db = db
         self.llm = llm
         self.style = style
+        self.local_data_manager = local_data_manager
         self.uin = 0
         self.name = "我"
         # 获取唯一管理员
@@ -452,6 +454,14 @@ class PostOperator:
 
                     # 2. 如果是主评论(不是楼中楼)
                     if comment.parent_tid is None:
+                        if comment.tid and self.local_data_manager.is_comment_replied(
+                            comment.tid
+                        ):
+                            logger.debug(
+                                f"[自动回复] 评论 {comment.tid} 已回复过，跳过"
+                            )
+                            continue
+
                         # 检查是否已经回复过（查看楼中楼是否有bot的回复）
                         has_replied = False
                         for sub_comment in detail.comments:
@@ -467,6 +477,7 @@ class PostOperator:
                             logger.debug(
                                 f"[自动回复] 已回复过评论 from {comment.nickname}: {comment.content[:20]}..."
                             )
+                            self.local_data_manager.save_replied_comment(comment.tid)
                             continue
 
                         # 生成回复内容
@@ -486,6 +497,7 @@ class PostOperator:
                             logger.info(
                                 f"[自动回复] 成功回复评论 from {comment.nickname}: {reply_text[:50]}..."
                             )
+                            self.local_data_manager.save_replied_comment(comment.tid)
                             # 只回复一次后就跳出，避免重复处理同一条评论
                             break
                         else:

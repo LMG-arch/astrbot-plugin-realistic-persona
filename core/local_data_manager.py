@@ -26,6 +26,8 @@ class LocalDataManager:
         self.news_file = self.data_dir / "news_data.json"
         # 绘画提示词历史文件
         self.drawing_prompts_file = self.data_dir / "drawing_prompts.json"
+        # 已回复评论记录文件
+        self.replied_comments_file = self.data_dir / "replied_comments.json"
 
         # 初始化数据文件
         self._init_data_files()
@@ -37,6 +39,7 @@ class LocalDataManager:
             self.schedule_file,
             self.news_file,
             self.drawing_prompts_file,
+            self.replied_comments_file,
         ]:
             if not file_path.exists():
                 file_path.write_text(
@@ -154,6 +157,25 @@ class LocalDataManager:
             logger.debug("[LOCAL DATA] 绘画提示词已保存到本地")
         except Exception as e:
             logger.error(f"[LOCAL DATA] 保存绘画提示词失败: {e}")
+
+    def save_replied_comment(self, comment_tid: int | str):
+        """保存已回复的评论ID，避免重复回复"""
+        try:
+            data = self._load_json_file(self.replied_comments_file)
+            data[str(comment_tid)] = {"timestamp": datetime.now().isoformat()}
+            self._save_json_file(self.replied_comments_file, data)
+            logger.debug(f"[LOCAL DATA] 已保存已回复评论: {comment_tid}")
+        except Exception as e:
+            logger.error(f"[LOCAL DATA] 保存已回复评论失败: {e}")
+
+    def is_comment_replied(self, comment_tid: int | str) -> bool:
+        """检查评论是否已经回复过"""
+        try:
+            data = self._load_json_file(self.replied_comments_file)
+            return str(comment_tid) in data
+        except Exception as e:
+            logger.error(f"[LOCAL DATA] 检查已回复评论失败: {e}")
+            return False
 
     def get_recent_drawing_prompts(self, days: int = 3, max_count: int = 10) -> list:
         """获取最近的绘画提示词

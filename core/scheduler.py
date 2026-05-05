@@ -35,6 +35,9 @@ class AutoPublish:
         self.publish_times_per_day = config.get("publish_times_per_day", 3)
         self.publish_time_ranges = config.get("publish_time_ranges", [])
         self.insomnia_probability = config.get("insomnia_probability", 0.15)
+        self.comment_check_interval_minutes = config.get(
+            "qzone_comment_check_interval_minutes", 60
+        )
 
         # 如果未指定时间段或为空，或者时间段数量与发说说次数不匹配，自动重新生成
         if (
@@ -101,16 +104,16 @@ class AutoPublish:
 
     def _schedule_comment_check(self):
         """安排定期检查评论并回复的任务"""
-        # 每10分钟检查一次新评论
+        interval_minutes = self.comment_check_interval_minutes
+        if not isinstance(interval_minutes, (int, float)) or interval_minutes <= 0:
+            interval_minutes = 60
         self.scheduler.add_job(
             func=self._check_and_reply_comments,
-            trigger=IntervalTrigger(
-                minutes=10, timezone=self.timezone
-            ),  # 每10分钟检查一次
+            trigger=IntervalTrigger(minutes=interval_minutes, timezone=self.timezone),
             name="comment_checker",
             max_instances=1,
         )
-        logger.info("[自动回复评论] 已启动，每10分钟检查一次")
+        logger.info(f"[自动回复评论] 已启动，每{interval_minutes}分钟检查一次")
 
     async def _check_and_reply_comments(self):
         """检查并回复评论"""

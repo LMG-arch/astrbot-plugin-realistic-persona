@@ -895,6 +895,7 @@ class Main(Star):
             self.post_db,
             self.llm,
             self.style,  # type: ignore[arg-type]
+            self.local_data_manager,
         )
         logger.info("[QQ空间] PostOperator创建完成")
 
@@ -937,14 +938,19 @@ class Main(Star):
             )
 
             self._comment_check_scheduler = AsyncIOScheduler(timezone=timezone)
+            interval_minutes = self.config.get(
+                "qzone_comment_check_interval_minutes", 60
+            )
             self._comment_check_scheduler.add_job(
                 func=self._standalone_check_and_reply_comments,
-                trigger=IntervalTrigger(minutes=10, timezone=timezone),
+                trigger=IntervalTrigger(minutes=interval_minutes, timezone=timezone),
                 name="standalone_comment_checker",
                 max_instances=1,
             )
             self._comment_check_scheduler.start()
-            logger.info("[QQ空间][独立评论检查] 已启动，每10分钟检查一次")
+            logger.info(
+                f"[QQ空间][独立评论检查] 已启动，每{interval_minutes}分钟检查一次"
+            )
         except Exception as e:
             logger.error(f"[QQ空间][独立评论检查] 启动失败: {e}")
 

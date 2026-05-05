@@ -346,6 +346,13 @@
     "condition": {"enable_qzone": true},
     "hint": "自动检查并回复别人对你说说的评论（独立于自动发说说，即使未开启自动发说说也会生效）"
   },
+  "qzone_comment_check_interval_minutes": {
+    "description": "QQ空间评论检查间隔（分钟）",
+    "type": "int",
+    "default": 60,
+    "condition": {"enable_qzone": true},
+    "hint": "自动回复QQ空间评论的定时检查间隔，单位为分钟。默认60分钟。"
+  },
   
   "_section_async_thinking": {
     "description": "========== 异步思考系统配置 ==========",

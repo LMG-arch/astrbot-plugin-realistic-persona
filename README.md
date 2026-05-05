@@ -277,6 +277,8 @@ pip install -r requirements.txt
   - 是否使用独立的新闻获取模块（支持多源容错），而非仅依赖LLM联网功能
 - `news_online_fetch`: 是否启用联网获取新闻（默认true）
   - 是否主动从多个新闻源获取实时新闻数据
+- `qzone_comment_check_interval_minutes`: QQ空间评论检查间隔，默认60分钟
+  - 自动回复QQ空间评论的定时检查间隔，支持自定义分钟数，建议设置为60或更长以避免重复和频率过高
 
 ### 个人资料自动更新配置
 
@@ -694,7 +696,7 @@ pip install -r requirements.txt
   - **支持异步回调**：`on_thought_generated`回调现在正确处理`async`函数（使用`asyncio.iscoroutine()`检测），确保`_on_thought_for_profile_update`的异步人格更新逻辑正常执行
 - v1.19.3: 支持独立配置自动回复QQ空间评论（不依赖自动发说说）
   - **新增`enable_auto_reply_comments`配置开关**：在配置文件中可独立控制是否自动回复QQ空间评论，默认开启
-  - **评论检查独立于自动发说说**：即使未开启自动发说说（`publish_times_per_day=0`），只要开启`enable_auto_reply_comments`，评论检查定时器仍会独立运行，每10分钟检查一次
+  - **评论检查独立于自动发说说**：即使未开启自动发说说（`publish_times_per_day=0`），只要开启`enable_auto_reply_comments`，评论检查定时器仍会独立运行，每60分钟检查一次（可通过`qzone_comment_check_interval_minutes`调整）
   - **兼容已有自动发说说**：当`AutoPublish`已创建时，评论检查由`AutoPublish`统一管理（遵循`enable_auto_reply_comments`配置），不会重复创建
   - **完整资源清理**：独立评论检查调度器在插件卸载时正确关闭
 - v1.19.4: 修复ModelScope绘图API异步模式兼容
@@ -713,7 +715,7 @@ pip install -r requirements.txt
   - **昵称和签名改用LLM生成**：不再使用"开心小助手"、"今天心情超好！✨"等随机模板，改为由LLM根据当前情绪、时间和上下文生成有意境的内容（如"晚风未眠"、"风里有花香"）
   - **头像风格多样化**：告别千篇一律的大头照，随机生成半身照、全身照、咖啡厅场景、花园风景、宠物等多种风格的头像
   - **头像尺寸统一1024x1024**：确保头像生成质量
-  - **降低QZone ctx未初始化警告频率**：评论检查每10分钟运行一次，ctx未初始化是正常状态（QZone未启用时），将warning降级为debug避免日志刷屏
+  - **降低QZone ctx未初始化警告频率**：评论检查每60分钟运行一次，ctx未初始化是正常状态（QZone未启用时），将warning降级为debug避免日志刷屏
 
 
 - v1.20.2: 异步思考直接执行Profile更新
