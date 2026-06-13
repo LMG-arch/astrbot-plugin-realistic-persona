@@ -10,6 +10,8 @@ from pathlib import Path
 
 from astrbot.api import logger
 
+from .utils import atomic_write_json
+
 
 class LifeStoryEngine:
     """人生故事引擎
@@ -87,8 +89,7 @@ class LifeStoryEngine:
     def _save_state(self):
         """保存引擎状态"""
         try:
-            with open(self.state_file, "w", encoding="utf-8") as f:
-                json.dump(self.state, f, ensure_ascii=False, indent=2)
+            atomic_write_json(self.state_file, self.state)
         except Exception as e:
             logger.error(f"[人生故事引擎] 保存状态失败: {e}")
 
@@ -112,8 +113,7 @@ class LifeStoryEngine:
     def _save_life_story(self):
         """保存人生故事"""
         try:
-            with open(self.life_story_file, "w", encoding="utf-8") as f:
-                json.dump(self.life_story, f, ensure_ascii=False, indent=2)
+            atomic_write_json(self.life_story_file, self.life_story)
         except Exception as e:
             logger.error(f"[人生故事引擎] 保存人生故事失败: {e}")
 
@@ -135,8 +135,7 @@ class LifeStoryEngine:
     def _save_context_cache(self):
         """保存上下文缓存"""
         try:
-            with open(self.context_cache_file, "w", encoding="utf-8") as f:
-                json.dump(self.context_cache, f, ensure_ascii=False, indent=2)
+            atomic_write_json(self.context_cache_file, self.context_cache)
         except Exception as e:
             logger.error(f"[人生故事引擎] 保存上下文缓存失败: {e}")
 
@@ -191,10 +190,16 @@ class LifeStoryEngine:
                     with open(conversations_file, encoding="utf-8") as f:
                         for line in f:
                             if line.strip():
-                                record = json.loads(line)
-                                timestamp = datetime.fromisoformat(
-                                    record.get("timestamp", "")
-                                )
+                                try:
+                                    record = json.loads(line)
+                                except json.JSONDecodeError:
+                                    continue
+                                try:
+                                    timestamp = datetime.fromisoformat(
+                                        record.get("timestamp", "")
+                                    )
+                                except (ValueError, TypeError):
+                                    continue
                                 if timestamp > cutoff_time:
                                     data["conversations"].append(
                                         {
@@ -212,10 +217,16 @@ class LifeStoryEngine:
                     with open(events_file, encoding="utf-8") as f:
                         for line in f:
                             if line.strip():
-                                record = json.loads(line)
-                                timestamp = datetime.fromisoformat(
-                                    record.get("timestamp", "")
-                                )
+                                try:
+                                    record = json.loads(line)
+                                except json.JSONDecodeError:
+                                    continue
+                                try:
+                                    timestamp = datetime.fromisoformat(
+                                        record.get("timestamp", "")
+                                    )
+                                except (ValueError, TypeError):
+                                    continue
                                 if timestamp > cutoff_time:
                                     data["events"].append(
                                         {
@@ -232,10 +243,16 @@ class LifeStoryEngine:
                     with open(thoughts_file, encoding="utf-8") as f:
                         for line in f:
                             if line.strip():
-                                record = json.loads(line)
-                                timestamp = datetime.fromisoformat(
-                                    record.get("timestamp", "")
-                                )
+                                try:
+                                    record = json.loads(line)
+                                except json.JSONDecodeError:
+                                    continue
+                                try:
+                                    timestamp = datetime.fromisoformat(
+                                        record.get("timestamp", "")
+                                    )
+                                except (ValueError, TypeError):
+                                    continue
                                 if timestamp > cutoff_time:
                                     data["thoughts"].append(
                                         {
@@ -302,7 +319,7 @@ class LifeStoryEngine:
                 prompt=prompt, system_prompt=self._get_story_system_prompt()
             )
 
-            if response and hasattr(response, "completion_text"):
+            if response and hasattr(response, "completion_text") and response.completion_text:
                 story_update = response.completion_text.strip()
 
                 # 解析并更新人生故事
@@ -420,7 +437,7 @@ class LifeStoryEngine:
             # 更新当前状态
             self.life_story["current_state"] = {
                 "last_update": datetime.now().isoformat(),
-                "total_chapters": self.state["current_chapter"] + 1,
+                "total_chapters": self.state["current_chapter"],
             }
 
             self._save_life_story()
@@ -453,7 +470,7 @@ class LifeStoryEngine:
                 system_prompt="你是一个文本压缩专家，擅长用最少的字数表达最多的信息。请将提供的人生故事压缩为精简的上下文提示。",
             )
 
-            if response and hasattr(response, "completion_text"):
+            if response and hasattr(response, "completion_text") and response.completion_text:
                 compact_context = response.completion_text.strip()
 
                 self.context_cache = {

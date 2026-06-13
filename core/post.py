@@ -1,10 +1,12 @@
-# pots.py
+# post.py
 
 import json
 import re
 import typing
 from datetime import datetime
 from pathlib import Path
+
+import sqlite3
 
 import aiosqlite
 import pydantic
@@ -37,17 +39,23 @@ def extract_and_replace_nickname(input_string):
     pattern = r"\{[^{}]*\}"
 
     def replace_func(match):
-        content = match.group(0)
-        # 按照键值对分割
-        pairs = content[1:-1].split(",")
-        nick_value = ""
-        for pair in pairs:
-            key, value = pair.split(":", 1)
-            if key.strip() == "nick":
-                nick_value = value.strip()
-                break
-        # 如果找到nick值，则返回@nick_value，否则返回空字符串
-        return f"{nick_value} " if nick_value else ""
+        try:
+            content = match.group(0)
+            # 按照键值对分割
+            pairs = content[1:-1].split(",")
+            nick_value = ""
+            for pair in pairs:
+                parts = pair.split(":", 1)
+                if len(parts) != 2:
+                    continue
+                key, value = parts
+                if key.strip() == "nick":
+                    nick_value = value.strip()
+                    break
+            # 如果找到nick值，则返回@nick_value，否则返回空字符串
+            return f"{nick_value} " if nick_value else ""
+        except Exception:
+            return ""
 
     return re.sub(pattern, replace_func, input_string)
 
@@ -143,8 +151,9 @@ class Post(pydantic.BaseModel):
 
     def update(self, **kwargs):
         """更新 Post 对象的属性"""
+        allowed_fields = self.model_fields.keys()
         for key, value in kwargs.items():
-            if hasattr(self, key):
+            if key in allowed_fields:
                 setattr(self, key, value)
             else:
                 raise AttributeError(f"Post 对象没有属性 {key}")
@@ -167,8 +176,19 @@ class Post(pydantic.BaseModel):
             return self.id
 
         # 3. 新记录 → 插入
-        self.id = await db.add(self)
-        return self.id
+        try:
+            self.id = await db.add(self)
+            return self.id
+        except sqlite3.IntegrityError:
+            # Race condition: another task inserted the same tid between
+            # our get() check and this insert.  Fall back to update.
+            if self.tid and self.tid.strip():
+                old = await db.get(key="tid", value=self.tid)
+                if old:
+                    self.id = old.id
+                    await db.update(self)
+                    return self.id
+            raise
 
 
 class PostDB:
@@ -266,7 +286,8 @@ class PostDB:
             )
             await db.commit()
             last_id = cur.lastrowid  # 获取自增ID
-            assert last_id is not None
+            if last_id is None:
+                raise RuntimeError("Failed to get lastrowid after INSERT")
             return last_id
 
     async def get(self, value, key: post_key = "id") -> Post | None:

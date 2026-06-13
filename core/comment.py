@@ -27,14 +27,18 @@ class Comment(BaseModel):
     # 可选：去掉 QQ 内置表情标记 [em]e123[/em]
     @property
     def plain_content(self) -> str:
-        return re.sub(r"\[em\]e\d+\[/em\]", "", self.content)
+        return re.sub(r"\[em\].*?\[/em\]", "", self.content)
 
     # ------------------- 工厂方法 -------------------
     @staticmethod
     def from_raw(raw: dict, parent_tid: int | None = None) -> Comment:
         """单条 dict → Comment（内部使用）"""
+        try:
+            uin_val = int(raw.get("uin") or 0)
+        except (ValueError, TypeError):
+            uin_val = 0
         return Comment(
-            uin=int(raw.get("uin") or 0),
+            uin=uin_val,
             nickname=raw.get("name") or "",
             content=raw.get("content") or "",
             create_time=int(raw.get("create_time") or 0),

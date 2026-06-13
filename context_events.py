@@ -5,10 +5,14 @@
 
 import asyncio
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from enum import Enum
+from typing import Any
 
 from astrbot.api import logger
+
+IDLE_THRESHOLD_SECONDS = 300  # 5 minutes
+CONVERSATION_RESUME_THRESHOLD = 600  # 10 minutes
 
 
 class EventType(Enum):
@@ -28,26 +32,77 @@ class ContextEvent:
     """上下文事件"""
 
     def __init__(
-        self, event_type: EventType, data: dict, timestamp: float | None = None
+        self,
+        event_type: EventType,
+        data: dict[str, Any] | None = None,
+        timestamp: float | None = None,
     ):
         self.event_type = event_type
-        self.data = data
+        self.data = data or {}
         self.timestamp = timestamp or time.time()
 
     def __repr__(self):
-        return f"ContextEvent({self.event_type.value}, {self.data})"
+        data_str = str(self.data)
+        if len(data_str) > 100:
+            data_str = data_str[:100] + "..."
+        return f"ContextEvent({self.event_type.value}, {data_str})"
+
+
+class EventDetector:
+    GREETINGS = [
+        "你好",
+        "嗨",
+        "哈喽",
+        "在吗",
+        "早上好",
+        "晚上好",
+        "早安",
+        "晚安",
+        "午安",
+    ]
+
+    _PUNCTUATION = str.maketrans("", "", "，。！？、；：""''【】《》（）…—·,.!?;:\"'()[]{} ")
+
+    @staticmethod
+    def is_greeting(message: str) -> bool:
+        message_clean = message.lower().strip().translate(EventDetector._PUNCTUATION)
+        return any(g in message_clean for g in EventDetector.GREETINGS)
+
+    @staticmethod
+    def extract_topic(message: str) -> str | None:
+        prefixes = ["我觉得", "我认为", "我想", "关于", "说到", "说起", "聊到"]
+        for prefix in prefixes:
+            if message.startswith(prefix):
+                return message[len(prefix) :].strip()
+        keywords = {
+            "天气": ["天气", "下雨", "晴天", "温度"],
+            "绘画": ["画", "图", "绘", "生成图片", "自拍"],
+            "聊天": ["聊天", "说话", "讲", "告诉"],
+            "帮助": ["帮", "怎么", "如何", "教"],
+        }
+        for topic, words in keywords.items():
+            if any(word in message for word in words):
+                return topic
+        return None
 
 
 class EventTrigger:
     """事件触发器"""
 
     def __init__(self):
-        self.handlers: dict[EventType, list[Callable]] = {}
+        self.handlers: dict[
+            EventType, list[Callable[[ContextEvent], Awaitable[Any] | Any]]
+        ] = {}
         self.last_message_time: float | None = None
         self.message_count = 0
         self.last_topic = None
+        self._detector = EventDetector()
 
-    def register_handler(self, event_type: EventType, handler: Callable):
+    def register_handler(
+        self,
+        event_type: EventType,
+        handler: Callable[[ContextEvent], Awaitable[Any] | Any],
+    ):
         """
         注册事件处理器
 
@@ -72,7 +127,7 @@ class EventTrigger:
                 if asyncio.iscoroutinefunction(handler):
                     await handler(event)
                 else:
-                    handler(event)
+                    await asyncio.to_thread(handler, event)
             except Exception as e:
                 logger.error(f"事件处理器执行失败: {e}")
 
@@ -93,7 +148,7 @@ class EventTrigger:
         current_time = time.time()
 
         # 检测问候
-        if self._is_greeting(message):
+        if self._detector.is_greeting(message):
             events.append(ContextEvent(EventType.GREETING, {"message": message}))
 
         # 检测长消息
@@ -105,24 +160,34 @@ class EventTrigger:
             )
 
         # 检测用户空闲（距离上次消息超过5分钟）
-        if self.last_message_time and (current_time - self.last_message_time) > 300:
+        # Note: Only detect idle if the user was idle *before* sending this message,
+        # not if the current message itself is what ended the idle period.
+        # We record idle as a fact about the gap, but skip if this is the trigger.
+        idle_duration = (current_time - self.last_message_time) if self.last_message_time else 0
+        if idle_duration > IDLE_THRESHOLD_SECONDS:
             events.append(
                 ContextEvent(
                     EventType.USER_IDLE,
-                    {"idle_duration": current_time - self.last_message_time},
+                    {"idle_duration": idle_duration},
                 )
             )
 
         # 检测对话开始（第一条消息或长时间空闲后的消息）
-        if self.message_count == 0 or (
-            self.last_message_time and (current_time - self.last_message_time) > 600
-        ):
+        # Make CONVERSATION_START mutually exclusive with USER_IDLE:
+        # if a conversation is starting/resuming, don't also fire idle.
+        is_conversation_start = self.message_count == 0 or (
+            self.last_message_time
+            and (current_time - self.last_message_time) > CONVERSATION_RESUME_THRESHOLD
+        )
+        if is_conversation_start:
             events.append(
                 ContextEvent(EventType.CONVERSATION_START, {"message": message})
             )
+            # Remove USER_IDLE if it was just added -- conversation start supersedes it
+            events = [e for e in events if e.event_type != EventType.USER_IDLE]
 
         # 检测话题切换
-        current_topic = self._extract_topic(message)
+        current_topic = self._detector.extract_topic(message)
         if self.last_topic and current_topic and current_topic != self.last_topic:
             events.append(
                 ContextEvent(
@@ -139,42 +204,6 @@ class EventTrigger:
 
         return events
 
-    def _is_greeting(self, message: str) -> bool:
-        """检测是否是问候语"""
-        greetings = [
-            "你好",
-            "您好",
-            "hi",
-            "hello",
-            "嗨",
-            "hey",
-            "早上好",
-            "晚上好",
-            "下午好",
-            "早安",
-            "晚安",
-            "在吗",
-            "在不在",
-        ]
-        message_lower = message.lower().strip()
-        return any(greeting in message_lower for greeting in greetings)
-
-    def _extract_topic(self, message: str) -> str | None:
-        """提取消息主题（简化实现）"""
-        # 这里可以使用更复杂的NLP方法，目前使用关键词提取
-        keywords = {
-            "天气": ["天气", "下雨", "晴天", "温度"],
-            "绘画": ["画", "图", "绘", "生成图片", "自拍"],
-            "聊天": ["聊天", "说话", "讲", "告诉"],
-            "帮助": ["帮", "怎么", "如何", "教"],
-        }
-
-        for topic, words in keywords.items():
-            if any(word in message for word in words):
-                return topic
-
-        return None
-
     def reset(self):
         """重置触发器状态"""
         self.last_message_time = None
@@ -187,7 +216,8 @@ class ProactiveMessageManager:
 
     def __init__(self):
         self.scheduled_messages: list[dict] = []
-        self.running = False
+        self._stop_event = asyncio.Event()
+        self._id_counter = 0
 
     def schedule_message(
         self,
@@ -195,7 +225,7 @@ class ProactiveMessageManager:
         delay: float,
         session_id: str,
         context_data: dict | None = None,
-    ):
+    ) -> int:
         """
         调度一条主动消息
 
@@ -204,36 +234,43 @@ class ProactiveMessageManager:
             delay: 延迟时间（秒）
             session_id: 会话ID
             context_data: 上下文数据
+
+        Returns:
+            调度消息的ID
         """
         scheduled_time = time.time() + delay
+        self._id_counter += 1
+        msg_id = self._id_counter
         self.scheduled_messages.append(
             {
+                "id": msg_id,
                 "message": message,
                 "scheduled_time": scheduled_time,
                 "session_id": session_id,
                 "context_data": context_data or {},
             }
         )
+        return msg_id
 
-    async def start_scheduler(self, send_callback: Callable):
+    async def start_scheduler(
+        self, send_callback: Callable[[str, str, dict[str, Any]], Awaitable[None]]
+    ):
         """
         启动调度器
 
         Args:
             send_callback: 消息发送回调函数
         """
-        self.running = True
+        self._stop_event.clear()
 
-        while self.running:
+        while not self._stop_event.is_set():
             current_time = time.time()
             messages_to_send = []
 
-            # 找出所有应该发送的消息
             for msg_data in self.scheduled_messages:
                 if msg_data["scheduled_time"] <= current_time:
                     messages_to_send.append(msg_data)
 
-            # 发送消息并从队列中移除
             for msg_data in messages_to_send:
                 try:
                     await send_callback(
@@ -241,17 +278,37 @@ class ProactiveMessageManager:
                         msg_data["session_id"],
                         msg_data["context_data"],
                     )
+                    self.scheduled_messages = [
+                        m for m in self.scheduled_messages if m["id"] != msg_data["id"]
+                    ]
                 except Exception as e:
                     logger.error(f"发送主动消息失败: {e}")
+                    msg_data["retry_count"] = msg_data.get("retry_count", 0) + 1
+                    if msg_data["retry_count"] >= 3:
+                        logger.error(
+                            f"消息发送失败3次，放弃: {msg_data['message'][:50]}"
+                        )
+                        self.scheduled_messages = [
+                            m
+                            for m in self.scheduled_messages
+                            if m["id"] != msg_data["id"]
+                        ]
 
-                self.scheduled_messages.remove(msg_data)
-
-            # 等待一段时间再检查
-            await asyncio.sleep(1)
+            # Calculate timeout based on next scheduled message to avoid busy polling
+            if self.scheduled_messages:
+                next_time = min(m["scheduled_time"] for m in self.scheduled_messages)
+                timeout = max(0.1, next_time - time.time())
+            else:
+                timeout = 1.0  # No messages pending, poll every second
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=timeout)
+                break
+            except asyncio.TimeoutError:
+                pass
 
     def stop_scheduler(self):
         """停止调度器"""
-        self.running = False
+        self._stop_event.set()
 
     def clear_scheduled_messages(self, session_id: str | None = None):
         """
@@ -282,7 +339,7 @@ class ContextState:
             self.states[session_id] = {}
         self.states[session_id][key] = value
 
-    def get_state(self, session_id: str, key: str, default=None):
+    def get_state(self, session_id: str, key: str, default: Any = None) -> Any:
         """获取会话状态"""
         return self.states.get(session_id, {}).get(key, default)
 

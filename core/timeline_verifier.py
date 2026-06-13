@@ -11,6 +11,8 @@ from typing import Any
 
 from astrbot.api import logger
 
+from .utils import atomic_write_json
+
 
 class TimelineVerifier:
     """时间线验证系统 - 确保经历的时间一致性和逻辑连贯性"""
@@ -133,8 +135,7 @@ class TimelineVerifier:
 
             timeline_data["last_verified"] = datetime.now().isoformat()
 
-            with open(self.timeline_file, "w", encoding="utf-8") as f:
-                json.dump(timeline_data, f, ensure_ascii=False, indent=2)
+            atomic_write_json(self.timeline_file, timeline_data)
 
             # 更新关联图
             self._update_experience_graph(
@@ -184,9 +185,12 @@ class TimelineVerifier:
             elif "去年" in date_input:
                 last_year = datetime.now() - timedelta(days=365)
                 return last_year.strftime("%Y")
-            elif "今天" in date_input or "昨天" in date_input:
+            elif "今天" in date_input:
                 today = datetime.now().strftime("%Y-%m-%d")
                 return today
+            elif "昨天" in date_input:
+                yesterday = datetime.now() - timedelta(days=1)
+                return yesterday.strftime("%Y-%m-%d")
 
             return None
 
@@ -324,8 +328,7 @@ class TimelineVerifier:
 
             graph_data["last_updated"] = datetime.now().isoformat()
 
-            with open(self.experience_graph_file, "w", encoding="utf-8") as f:
-                json.dump(graph_data, f, ensure_ascii=False, indent=2)
+            atomic_write_json(self.experience_graph_file, graph_data)
 
         except Exception as e:
             logger.error(f"[时间线] 更新关联图失败: {e}")
@@ -382,10 +385,12 @@ class TimelineVerifier:
             all_experiences = timeline_data.get("experiences", {})
 
             # 分析1: 时间跨度
+            # Filter out zero values from invalid/unparseable dates
             dates = [
                 self._date_to_sortable(exp.get("event_date", ""))
                 for exp in all_experiences.values()
             ]
+            dates = [d for d in dates if d > 0]
             time_span = (
                 (max(dates) - min(dates)) / (365.25 * 24 * 3600) if dates else 0
             )  # 年数
@@ -409,7 +414,14 @@ class TimelineVerifier:
             conflicts = []
             if self.conflict_log_file.exists():
                 with open(self.conflict_log_file, encoding="utf-8") as f:
-                    conflicts = [json.loads(line) for line in f if line.strip()]
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            conflicts.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue
 
             # 分析5: 连贯性评分
             coherence_score = self._calculate_coherence_score(
@@ -501,7 +513,7 @@ class TimelineVerifier:
             return {
                 "total_experiences": len(experiences),
                 "experiences_by_type": {k: len(v) for k, v in by_type.items()},
-                "timeline_sequence": sequences[:10],  # 最近10个事件
+                "timeline_sequence": sequences[-10:],  # 最近10个事件
                 "date_range": {
                     "earliest": min(
                         [exp.get("event_date") for exp in experiences.values()]

@@ -5,6 +5,7 @@
 
 import json
 import random
+import re
 import time
 from collections import defaultdict
 from datetime import datetime
@@ -12,6 +13,8 @@ from pathlib import Path
 from typing import Any
 
 from astrbot.api import logger
+
+from .utils import atomic_write_json
 
 
 class SelfAwarenessSystem:
@@ -37,7 +40,7 @@ class SelfAwarenessSystem:
         self.behavior_stats = {
             "total_interactions": 0,
             "trait_manifestations": defaultdict(int),  # 特质表现次数
-            "inconsistencies": [],  # 不一致记录
+            "inconsistencies": [],  # 不一致记录 (capped at 100)
             "last_self_review": 0,  # 上次自我审视时间
         }
 
@@ -66,6 +69,11 @@ class SelfAwarenessSystem:
     def _save_state(self):
         """保存状态"""
         try:
+            # Cap inconsistencies list at 100 entries to prevent unbounded growth
+            inconsistencies = self.behavior_stats["inconsistencies"]
+            if len(inconsistencies) > 100:
+                self.behavior_stats["inconsistencies"] = inconsistencies[-100:]
+                inconsistencies = self.behavior_stats["inconsistencies"]
             data = {
                 "self_description": self.self_description,
                 "behavior_stats": {
@@ -73,13 +81,12 @@ class SelfAwarenessSystem:
                     "trait_manifestations": dict(
                         self.behavior_stats["trait_manifestations"]
                     ),
-                    "inconsistencies": self.behavior_stats["inconsistencies"],
+                    "inconsistencies": inconsistencies,
                     "last_self_review": self.behavior_stats["last_self_review"],
                 },
                 "updated_at": datetime.now().isoformat(),
             }
-            with open(self.state_file, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            atomic_write_json(self.state_file, data)
         except Exception as e:
             logger.error(f"[自我认知] 保存状态失败: {e}")
 
@@ -213,15 +220,13 @@ class ExpressionEvolution:
                 "jokes_successful": self.jokes_successful,
                 "updated_at": datetime.now().isoformat(),
             }
-            with open(self.state_file, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            atomic_write_json(self.state_file, data)
         except Exception as e:
             logger.error(f"[表达演进] 保存状态失败: {e}")
 
     def learn_from_content(self, content: str):
         """从内容中学习新词汇"""
         # 按中文标点和空格分词，提取长度>2的词
-        import re
 
         tokens = re.split(r"[\s，。！？、；：\n,.!?;:]+", content)
         words = [w for w in tokens if len(w) > 2 and w not in self.learned_words]
@@ -236,6 +241,19 @@ class ExpressionEvolution:
                 logger.info(f"[表达演进] 词汇等级提升至 {self.vocabulary_level}")
 
             self._save_state()
+        else:
+            # Vocabulary decay: if no new words learned, allow level to decrease
+            # by removing random unused words, simulating forgetting
+            if len(self.learned_words) > 50 and random.random() < 0.1:
+                # Remove up to 5 random words to simulate natural forgetting
+                to_remove = random.sample(list(self.learned_words), min(5, len(self.learned_words) // 10))
+                for w in to_remove:
+                    self.learned_words.discard(w)
+                new_level = min(10, len(self.learned_words) // 100 + 1)
+                if new_level < self.vocabulary_level:
+                    self.vocabulary_level = new_level
+                    logger.info(f"[表达演进] 词汇等级衰减至 {self.vocabulary_level}")
+                self._save_state()
 
     def record_joke(self, success: bool):
         """记录笑话效果"""
@@ -243,13 +261,12 @@ class ExpressionEvolution:
         if success:
             self.jokes_successful += 1
 
-        # 计算成功率，提升幽默成熟度
+        # 计算成功率，更新幽默成熟度
         if self.jokes_told >= 10:
             success_rate = self.jokes_successful / self.jokes_told
             new_maturity = min(10, int(success_rate * 10))
-            if new_maturity > self.humor_maturity:
-                self.humor_maturity = new_maturity
-                logger.info(f"[表达演进] 幽默成熟度提升至 {self.humor_maturity}")
+            self.humor_maturity = new_maturity
+            logger.info(f"[表达演进] 幽默成熟度更新至 {self.humor_maturity}")
 
         self._save_state()
 
@@ -339,8 +356,7 @@ class HabitBalanceSystem:
                 "surprise_reset_time": self.surprise_reset_time,
                 "updated_at": datetime.now().isoformat(),
             }
-            with open(self.state_file, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            atomic_write_json(self.state_file, data)
         except Exception as e:
             logger.error(f"[习惯平衡] 保存状态失败: {e}")
 

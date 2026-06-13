@@ -269,9 +269,13 @@ class PostOperator:
                 if event:
                     img_path = await post.to_image(self.style)
                     if send_admin:
-                        event.message_obj.group_id = None  # type: ignore
-                        event.message_obj.sender.user_id = self.admin_id
-                    await event.send(event.image_result(img_path))
+                        # Send to admin via private message without mutating shared event
+                        await event.bot.send_private_msg(
+                            user_id=int(self.admin_id),
+                            message=event.image_result(img_path),
+                        )
+                    else:
+                        await event.send(event.image_result(img_path))
 
         logger.info(f"执行完毕，点赞成功 {like_succ} 条，评论成功 {comment_succ} 条")
 

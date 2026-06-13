@@ -3,11 +3,16 @@
 根据情绪变化自动更新QQ昵称、签名和头像
 """
 
+import asyncio
+import json
+import random
 import time
 from datetime import datetime
 from pathlib import Path
 
 from astrbot.api import logger
+
+from .utils import atomic_write_json
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
 )
@@ -27,11 +32,13 @@ class AutoProfileUpdater:
         enable_nickname: bool = False,
         enable_signature: bool = True,
         enable_avatar: bool = False,
-        cooldown: int = 1800,  # 30分钟
-        threshold: float = 0.6,  # 情绪强度阈值
+        enable_tag: bool = False,
+        cooldown: int = 1800,
+        threshold: float = 0.6,
         persona_name: str = "AI助手",
         max_updates_per_day: int = 3,
         max_updates_per_week: int = 10,
+        avatar_max_per_day: int = 1,
     ):
         """初始化自动Profile更新器
 
@@ -40,11 +47,13 @@ class AutoProfileUpdater:
             enable_nickname: 是否启用自动昵称更新
             enable_signature: 是否启用自动签名更新
             enable_avatar: 是否启用自动头像更新
+            enable_tag: 是否启用标签建议生成
             cooldown: 更新冷却时间（秒）
             threshold: 情绪变化阈值（0-1）
             persona_name: 角色名称
             max_updates_per_day: 每天最大更新次数
             max_updates_per_week: 每周最大更新次数（0表示不限制）
+            avatar_max_per_day: 头像每天独立最大更新次数
         """
         self.data_dir = data_dir
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -52,11 +61,13 @@ class AutoProfileUpdater:
         self.enable_nickname = enable_nickname
         self.enable_signature = enable_signature
         self.enable_avatar = enable_avatar
+        self.enable_tag = enable_tag
         self.cooldown = cooldown
         self.threshold = threshold
         self.persona_name = persona_name
         self.max_updates_per_day = max_updates_per_day
         self.max_updates_per_week = max_updates_per_week
+        self.avatar_max_per_day = avatar_max_per_day
 
         # 状态文件
         self.state_file = self.data_dir / "profile_update_state.json"
@@ -68,14 +79,15 @@ class AutoProfileUpdater:
         self.avatar_dir = self.data_dir / "avatars"
         self.avatar_dir.mkdir(parents=True, exist_ok=True)
 
+        # 并发锁，防止多次更新同时进行
+        self._update_lock = asyncio.Lock()
+
         logger.info(
-            f"[Profile更新器] 初始化完成 - 昵称:{enable_nickname}, 签名:{enable_signature}, 头像:{enable_avatar}"
+            f"[Profile更新器] 初始化完成 - 昵称:{enable_nickname}, 签名:{enable_signature}, 头像:{enable_avatar}, 标签:{enable_tag}, 头像每日上限:{avatar_max_per_day}"
         )
 
     def _load_state(self) -> dict:
         """加载状态"""
-        import json
-
         if self.state_file.exists():
             try:
                 with open(self.state_file, encoding="utf-8") as f:
@@ -87,23 +99,24 @@ class AutoProfileUpdater:
             "last_nickname_update": 0,
             "last_signature_update": 0,
             "last_avatar_update": 0,
+            "last_tag_update": 0,
             "current_nickname": "",
             "current_signature": "",
+            "current_tag_suggestion": "",
             "emotion_history": [],
             "daily_update_count": 0,
             "daily_update_date": "",
             "weekly_update_count": 0,
             "weekly_update_week": "",
+            "daily_avatar_count": 0,
+            "daily_avatar_date": "",
             "update_history": [],
         }
 
     def _save_state(self):
         """保存状态"""
-        import json
-
         try:
-            with open(self.state_file, "w", encoding="utf-8") as f:
-                json.dump(self.state, f, ensure_ascii=False, indent=2)
+            atomic_write_json(self.state_file, self.state)
         except Exception as e:
             logger.error(f"[Profile更新器] 保存状态失败: {e}")
 
@@ -115,26 +128,23 @@ class AutoProfileUpdater:
         """
         now = datetime.now()
         today_str = now.strftime("%Y-%m-%d")
-        week_str = now.strftime("%Y-W%W")
+        iso_year, iso_week, _ = now.isocalendar()
+        week_str = f"{iso_year}-W{iso_week:02d}"
 
-        # 重置每日计数（如果日期变了）
         if self.state.get("daily_update_date") != today_str:
             self.state["daily_update_count"] = 0
             self.state["daily_update_date"] = today_str
 
-        # 重置每周计数（如果周变了）
         if self.state.get("weekly_update_week") != week_str:
             self.state["weekly_update_count"] = 0
             self.state["weekly_update_week"] = week_str
 
-        # 检查每日限制
         if self.state["daily_update_count"] >= self.max_updates_per_day:
             logger.debug(
                 f"[Profile更新器] 今日已更新{self.state['daily_update_count']}次，达到上限{self.max_updates_per_day}"
             )
             return False
 
-        # 检查每周限制
         if (
             self.max_updates_per_week > 0
             and self.state["weekly_update_count"] >= self.max_updates_per_week
@@ -145,6 +155,31 @@ class AutoProfileUpdater:
             return False
 
         return True
+
+    def _check_avatar_daily_limit(self) -> bool:
+        """检查头像是否超过独立每日更新限制
+
+        Returns:
+            是否允许更新头像（True=允许，False=超限）
+        """
+        now = datetime.now()
+        today_str = now.strftime("%Y-%m-%d")
+
+        if self.state.get("daily_avatar_date") != today_str:
+            self.state["daily_avatar_count"] = 0
+            self.state["daily_avatar_date"] = today_str
+
+        if self.state.get("daily_avatar_count", 0) >= self.avatar_max_per_day:
+            logger.debug(
+                f"[Profile更新器] 今日头像已更新{self.state.get('daily_avatar_count', 0)}次，达到独立上限{self.avatar_max_per_day}"
+            )
+            return False
+
+        return True
+
+    def can_update(self, update_type: str) -> bool:
+        """Public wrapper for _can_update."""
+        return self._can_update(update_type)
 
     def _can_update(self, update_type: str) -> bool:
         """检查是否可以更新
@@ -175,10 +210,10 @@ class AutoProfileUpdater:
         last_update_key = f"last_{update_type}_update"
         self.state[last_update_key] = time.time()
 
-        # 递增每日/每周更新计数
         now = datetime.now()
         today_str = now.strftime("%Y-%m-%d")
-        week_str = now.strftime("%Y-W%W")
+        iso_year, iso_week, _ = now.isocalendar()
+        week_str = f"{iso_year}-W{iso_week:02d}"
 
         if self.state.get("daily_update_date") != today_str:
             self.state["daily_update_count"] = 0
@@ -190,7 +225,14 @@ class AutoProfileUpdater:
             self.state["weekly_update_week"] = week_str
         self.state["weekly_update_count"] = self.state.get("weekly_update_count", 0) + 1
 
-        # 记录更新历史
+        if update_type == "avatar":
+            if self.state.get("daily_avatar_date") != today_str:
+                self.state["daily_avatar_count"] = 0
+                self.state["daily_avatar_date"] = today_str
+            self.state["daily_avatar_count"] = (
+                self.state.get("daily_avatar_count", 0) + 1
+            )
+
         if "update_history" not in self.state:
             self.state["update_history"] = []
         self.state["update_history"].append(
@@ -200,13 +242,16 @@ class AutoProfileUpdater:
                 "date": today_str,
             }
         )
-        # 只保留最近30条
         self.state["update_history"] = self.state["update_history"][-30:]
 
         self._save_state()
         logger.debug(
             f"[Profile更新器] {update_type}更新已记录，今日{self.state['daily_update_count']}次，本周{self.state['weekly_update_count']}次"
         )
+
+    async def generate_nickname(self, *args, **kwargs):
+        """Public wrapper for _generate_nickname."""
+        return await self._generate_nickname(*args, **kwargs)
 
     async def _generate_nickname(
         self, emotion: str, intensity: float, llm_action=None, context_data: str = ""
@@ -262,8 +307,6 @@ class AutoProfileUpdater:
                 )
 
         # 备用逻辑：有意境的昵称模板（比"开心小助手"更有质感）
-        import random
-
         poetic_nicknames = {
             "开心": ["晨光正好", "花开有声", "风也甜", "星河入梦"],
             "悲伤": ["雨落无声", "晚风知意", "落叶归根", "夜色温柔"],
@@ -279,6 +322,10 @@ class AutoProfileUpdater:
 
         possible = poetic_nicknames.get(emotion, ["人间清醒"])
         return random.choice(possible)
+
+    async def generate_signature(self, *args, **kwargs):
+        """Public wrapper for _generate_signature."""
+        return await self._generate_signature(*args, **kwargs)
 
     async def _generate_signature(
         self, emotion: str, intensity: float, context: str = "", llm_action=None
@@ -333,8 +380,6 @@ class AutoProfileUpdater:
                 )
 
         # 备用逻辑：有意境的签名模板
-        import random
-
         poetic_signatures = {
             "开心": ["风里有花香", "今天份的快乐已到账", "世界在发光", "好事正在路上"],
             "悲伤": [
@@ -407,16 +452,24 @@ class AutoProfileUpdater:
         Returns:
             更新结果字典 {nickname: bool, signature: bool, avatar: bool}
         """
-        result = {"nickname": False, "signature": False, "avatar": False}
+        async with self._update_lock:
+            return await self._do_check_and_update(event, emotion, intensity, llm_action)
 
-        # 检查情绪强度是否达到阈值
+    async def _do_check_and_update(
+        self,
+        event: AiocqhttpMessageEvent,
+        emotion: str,
+        intensity: float,
+        llm_action=None,
+    ) -> dict[str, bool]:
+        result = {"nickname": False, "signature": False, "avatar": False, "tag": False}
+
         if intensity < self.threshold:
             logger.debug(
                 f"[Profile更新器] 情绪强度{intensity:.2f}未达到阈值{self.threshold}"
             )
             return result
 
-        # 检查每日/每周更新频率限制
         if not self._check_frequency_limit():
             logger.debug("[Profile更新器] 达到每日/每周更新频率限制，跳过")
             return result
@@ -464,7 +517,12 @@ class AutoProfileUpdater:
                     logger.info(f"[Profile更新器] 签名已更新为: {new_signature}")
 
             # 更新头像
-            if self.enable_avatar and self._can_update("avatar") and llm_action:
+            if (
+                self.enable_avatar
+                and self._can_update("avatar")
+                and self._check_avatar_daily_limit()
+                and llm_action
+            ):
                 # 生成情绪对应的头像提示词
                 avatar_prompt = self._generate_avatar_prompt(emotion, intensity)
                 logger.info(f"[Profile更新器] 开始生成头像，提示词: {avatar_prompt}")
@@ -481,14 +539,95 @@ class AutoProfileUpdater:
                     result["avatar"] = True
                     logger.info("[Profile更新器] 头像已更新")
 
-                    # 保存头像URL到状态
                     self.state["last_avatar_url"] = image_url
                     self._save_state()
+
+            # 生成标签建议
+            if self.enable_tag and self._can_update("tag"):
+                tag_suggestion = await self._generate_tag(
+                    emotion, intensity, llm_action=llm_action
+                )
+                if tag_suggestion:
+                    self.state["current_tag_suggestion"] = tag_suggestion
+                    self._record_update("tag")
+                    result["tag"] = True
+                    logger.info(f"[Profile更新器] 标签建议已生成: {tag_suggestion}")
 
         except Exception as e:
             logger.error(f"[Profile更新器] 更新失败: {e}", exc_info=True)
 
         return result
+
+    async def generate_tag(self, *args, **kwargs):
+        """Public wrapper for _generate_tag."""
+        return await self._generate_tag(*args, **kwargs)
+
+    async def _generate_tag(
+        self, emotion: str, intensity: float, llm_action=None
+    ) -> str:
+        """Generate QQ profile tag suggestions based on emotion.
+
+        Since QQ protocol (napcat/Lagrange) does not expose a tag-setting API,
+        this method generates tag text suggestions and logs them for the user
+        to apply manually in the QQ client.
+
+        Args:
+            emotion: Emotion type
+            intensity: Emotion intensity (0-1)
+            llm_action: LLM action instance for generation
+
+        Returns:
+            Suggested tag string (comma-separated tags)
+        """
+        if llm_action:
+            try:
+                prompt = f"""你是一个有独立内心世界的AI，现在需要为自己的QQ资料选择3-5个个性标签。
+
+当前状态：
+- 人设名字: {self.persona_name}
+- 此刻情绪: {emotion}（强度: {intensity:.1f}/1.0）
+
+请根据你此刻的心境和性格，选择3-5个个性标签。
+
+要求：
+- 像一个真实的人会选择标签，有个性、有品味
+- 不要太直白地表达情绪（比如不要"开心""难过"这种）
+- 可以是兴趣、态度、状态、审美相关的标签
+- 每个标签2-6个字
+- 举例风格：「深夜食堂」「咖啡依赖」「追风」「佛系」「社恐」「书虫」「夜猫子」「温柔且坚定」
+
+请只返回标签，用逗号分隔，不要任何解释。"""
+
+                generated = await llm_action.generate_nickname(prompt)
+                if generated and generated.strip():
+                    tags = generated.strip().strip('"\'""「」')
+                    if 2 < len(tags) <= 50:
+                        return tags
+            except Exception as e:
+                logger.warning(
+                    f"[Profile更新器] 通过LLM生成标签失败: {e}，使用备用逻辑"
+                )
+
+        tag_options = {
+            "开心": ["阳光少年", "甜食爱好者", "元气满满", "今日好心情"],
+            "悲伤": ["深夜emo", "独处时光", "雨天听众", "沉默是金"],
+            "生气": ["倔强", "不服输", "暴风前夕", "冷静思考"],
+            "兴奋": ["热血", "追光者", "全力以赴", "高燃"],
+            "平静": ["佛系", "岁月静好", "慢生活", "云淡风轻"],
+            "困惑": ["迷路中", "思考者", "十字路口", "寻找方向"],
+            "无聊": ["摸鱼", "等风来", "时间静止", "发呆冠军"],
+            "好奇": ["探索者", "十万个为什么", "追新", "未知控"],
+            "惊讶": ["意外惊喜", "世界观刷新", "万万没想到", "新大陆"],
+            "焦虑": ["赶due", "深夜未眠", "压力山大", "深呼吸"],
+        }
+
+        options = tag_options.get(emotion, ["人间清醒", "自由自在"])
+        selected = random.sample(options, min(3, len(options)))
+        return ",".join(selected)
+
+    def generate_avatar(self, *args, **kwargs):
+        """Public wrapper for _generate_avatar_prompt."""
+        return self._generate_avatar_prompt(*args, **kwargs)
 
     def _generate_avatar_prompt(self, emotion: str, intensity: float) -> str:
         """生成头像绘画提示词
@@ -503,8 +642,6 @@ class AutoProfileUpdater:
         Returns:
             绘画提示词
         """
-        import random
-
         # 情绪氛围映射
         emotion_moods = {
             "开心": [
@@ -631,6 +768,11 @@ class AutoProfileUpdater:
             summary += f"  当前签名: {self.state['current_signature']}\n"
 
         summary += f"\n头像更新: {'✓ 启用' if self.enable_avatar else '✗ 禁用'}\n"
+        summary += f"  今日头像更新: {self.state.get('daily_avatar_count', 0)}/{self.avatar_max_per_day}\n"
+
+        summary += f"\n标签建议: {'✓ 启用' if self.enable_tag else '✗ 禁用'}\n"
+        if self.state.get("current_tag_suggestion"):
+            summary += f"  当前标签: {self.state['current_tag_suggestion']}\n"
 
         # 情绪历史
         if self.state.get("emotion_history"):

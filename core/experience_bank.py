@@ -3,13 +3,15 @@
 记录所有对话、事件和用户互动模式，形成持续性记忆银行
 """
 
+import asyncio
 import json
-from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from astrbot.api import logger
+
+from .utils import atomic_write_json
 
 try:
     from .timeline_verifier import TimelineVerifier
@@ -17,7 +19,7 @@ try:
     TIMELINE_AVAILABLE = True
 except ImportError:
     TIMELINE_AVAILABLE = False
-    logger.warning("[经历银行] TimelineVerifier 未找到，时间线验证功能将被禁用")
+    logger.debug("[经历银行] TimelineVerifier 未找到，时间线验证功能将被禁用")
 
 
 class ExperienceBank:
@@ -41,6 +43,17 @@ class ExperienceBank:
         self.growth_file = self.data_dir / "growth.json"
         # 关系网络文件
         self.relationships_file = self.data_dir / "relationships.json"
+        # 长期项目文件
+        self.projects_file = self.data_dir / "projects.jsonl"
+        # 承诺文件
+        self.promises_file = self.data_dir / "promises.jsonl"
+        # 生物钟文件
+        self.circadian_file = self.data_dir / "circadian.jsonl"
+        # 人格分化文件
+        self.personality_file = self.data_dir / "personalities.jsonl"
+
+        # File lock for concurrent read-modify-write operations
+        self._file_lock = asyncio.Lock()
 
         # 初始化时间线验证器
         self.timeline_verifier = None
@@ -96,9 +109,10 @@ class ExperienceBank:
             session_id: 会话ID
         """
         try:
+            now = datetime.now()
             record = {
-                "timestamp": datetime.now().isoformat(),
-                "date": datetime.now().strftime("%Y-%m-%d"),
+                "timestamp": now.isoformat(),
+                "date": now.strftime("%Y-%m-%d"),
                 "user_id": user_id,
                 "session_id": session_id,
                 "user_message": user_message,
@@ -111,10 +125,10 @@ class ExperienceBank:
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
             # 更新关系网络
-            self._update_relationship(
+            self._update_relationship_sync(
                 user_id,
                 {
-                    "last_chat": datetime.now().isoformat(),
+                    "last_chat": now.isoformat(),
                     "interaction_type": "conversation",
                 },
             )
@@ -141,9 +155,10 @@ class ExperienceBank:
             metadata: 其他元数据
         """
         try:
+            now = datetime.now()
             record = {
-                "timestamp": datetime.now().isoformat(),
-                "date": datetime.now().strftime("%Y-%m-%d"),
+                "timestamp": now.isoformat(),
+                "date": now.strftime("%Y-%m-%d"),
                 "event_type": event_type,
                 "description": description,
                 "related_user_id": related_user_id,
@@ -226,7 +241,7 @@ class ExperienceBank:
             logger.error(f"[经历银行] 获取最近事件失败: {e}")
             return []
 
-    def update_growth(
+    async def update_growth(
         self,
         growth_type: str,
         item: str,
@@ -242,7 +257,18 @@ class ExperienceBank:
             level: 等级/进度（可选）
             validate_smoothness: 是否验证成长平滑性
         """
+        async with self._file_lock:
+            self._update_growth_sync(growth_type, item, level, validate_smoothness)
+
+    def _update_growth_sync(
+        self,
+        growth_type: str,
+        item: str,
+        level: int | None = None,
+        validate_smoothness: bool = True,
+    ):
         try:
+            now = datetime.now()
             with open(self.growth_file, encoding="utf-8") as f:
                 growth_data = json.load(f)
 
@@ -265,8 +291,8 @@ class ExperienceBank:
                 if item not in growth_data["skills"]:
                     growth_data["skills"][item] = {
                         "level": 1,
-                        "first_learned": datetime.now().isoformat(),
-                        "last_used": datetime.now().isoformat(),
+                        "first_learned": now.isoformat(),
+                        "last_used": now.isoformat(),
                         "growth_history": [],  # 成长历史
                     }
                 else:
@@ -278,20 +304,18 @@ class ExperienceBank:
                             {
                                 "from_level": growth_data["skills"][item]["level"],
                                 "to_level": level,
-                                "changed_at": datetime.now().isoformat(),
+                                "changed_at": now.isoformat(),
                             }
                         )
                         growth_data["skills"][item]["level"] = level
-                    growth_data["skills"][item]["last_used"] = (
-                        datetime.now().isoformat()
-                    )
+                    growth_data["skills"][item]["last_used"] = now.isoformat()
 
             elif growth_type == "interests":
                 # 检查是否已存在
                 existing_interests = [i.get("item") for i in growth_data["interests"]]
                 if item not in existing_interests:
                     growth_data["interests"].append(
-                        {"item": item, "discovered_at": datetime.now().isoformat()}
+                        {"item": item, "discovered_at": now.isoformat()}
                     )
                     logger.info(f"[经历银行] 新兴趣已添加: {item}")
 
@@ -306,22 +330,24 @@ class ExperienceBank:
                         )
                         if (datetime.now() - formed_at) < timedelta(days=7):
                             logger.debug("[经历银行] 观点添加频繁，建议间隔至少7天")
+                            return
 
                 growth_data["views"].append(
-                    {"view": item, "formed_at": datetime.now().isoformat()}
+                    {"view": item, "formed_at": now.isoformat()}
                 )
 
-            growth_data["updated_at"] = datetime.now().isoformat()
+            growth_data["updated_at"] = now.isoformat()
 
-            with open(self.growth_file, "w", encoding="utf-8") as f:
-                json.dump(growth_data, f, ensure_ascii=False, indent=2)
+            atomic_write_json(self.growth_file, growth_data)
 
             logger.info(f"[经历银行] 成长轨迹已更新: {growth_type} - {item}")
 
         except Exception as e:
             logger.error(f"[经历银行] 更新成长失败: {e}")
 
-    def _update_relationship(self, user_id: str, interaction_data: dict[str, Any]):
+    async def _update_relationship(
+        self, user_id: str, interaction_data: dict[str, Any]
+    ):
         """
         更新用户关系网络
 
@@ -329,15 +355,20 @@ class ExperienceBank:
             user_id: 用户ID
             interaction_data: 互动数据
         """
+        async with self._file_lock:
+            self._update_relationship_sync(user_id, interaction_data)
+
+    def _update_relationship_sync(self, user_id: str, interaction_data: dict[str, Any]):
         try:
+            now = datetime.now()
             with open(self.relationships_file, encoding="utf-8") as f:
                 relationships = json.load(f)
 
             if user_id not in relationships:
                 relationships[user_id] = {
-                    "first_met": datetime.now().isoformat(),
+                    "first_met": now.isoformat(),
                     "interaction_count": 0,
-                    "interaction_patterns": defaultdict(int),
+                    "interaction_patterns": {},
                     "last_interactions": [],
                     "estimated_personality": {},
                     "notes": "",
@@ -359,17 +390,7 @@ class ExperienceBank:
                 user_rel["interaction_patterns"][interaction_type] = 0
             user_rel["interaction_patterns"][interaction_type] += 1
 
-            with open(self.relationships_file, "w", encoding="utf-8") as f:
-                # 转换defaultdict为普通dict以便序列化
-                relationships_serializable = {}
-                for uid, rel in relationships.items():
-                    rel_copy = rel.copy()
-                    if isinstance(rel_copy.get("interaction_patterns"), defaultdict):
-                        rel_copy["interaction_patterns"] = dict(
-                            rel_copy["interaction_patterns"]
-                        )
-                    relationships_serializable[uid] = rel_copy
-                json.dump(relationships_serializable, f, ensure_ascii=False, indent=2)
+            atomic_write_json(self.relationships_file, relationships)
 
         except Exception as e:
             logger.error(f"[经历银行] 更新关系网络失败: {e}")
@@ -493,11 +514,17 @@ class ExperienceBank:
 
             # 收集所有与该用户相关的对话
             with open(self.conversations_file, encoding="utf-8") as f:
-                conversations = [
-                    json.loads(line)
-                    for line in f
-                    if json.loads(line).get("user_id") == user_id
-                ]
+                conversations = []
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                        if record.get("user_id") == user_id:
+                            conversations.append(record)
+                    except json.JSONDecodeError:
+                        continue
 
             if not conversations:
                 return []
@@ -628,7 +655,7 @@ class ExperienceBank:
 
         except Exception as e:
             logger.error(f"[经历银行] 生成关系特征失败: {e}")
-            return {}
+            return None
 
     def _analyze_interaction_patterns(self, patterns: dict[str, int]) -> dict[str, str]:
         """分析互动模式的性质"""
@@ -681,7 +708,7 @@ class ExperienceBank:
         # 计算互动间隔变化
         if len(interactions) > 1:
             timestamps = [
-                datetime.fromisoformat(i.get("timestamp", "")) for i in interactions
+                datetime.fromisoformat(i["timestamp"]) for i in interactions if i.get("timestamp")
             ]
             intervals = [
                 (timestamps[i + 1] - timestamps[i]).total_seconds()
@@ -787,17 +814,15 @@ class ExperienceBank:
             metadata: 其他元数据（进度、年份等）
         """
         try:
+            now = datetime.now()
             record = {
-                "timestamp": datetime.now().isoformat(),
-                "date": datetime.now().strftime("%Y-%m-%d"),
+                "timestamp": now.isoformat(),
+                "date": now.strftime("%Y-%m-%d"),
                 "project_name": project_name,
                 "description": description,
                 "status": status,
                 "metadata": metadata or {},
             }
-
-            if not hasattr(self, "projects_file"):
-                self.projects_file = self.data_dir / "projects.jsonl"
 
             with open(self.projects_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -826,9 +851,10 @@ class ExperienceBank:
             metadata: 其他元数据
         """
         try:
+            now = datetime.now()
             record = {
-                "timestamp": datetime.now().isoformat(),
-                "date": datetime.now().strftime("%Y-%m-%d"),
+                "timestamp": now.isoformat(),
+                "date": now.strftime("%Y-%m-%d"),
                 "promise": promise,
                 "related_user_id": related_user_id,
                 "deadline": deadline,
@@ -836,9 +862,6 @@ class ExperienceBank:
                 "completed_at": None,
                 "metadata": metadata or {},
             }
-
-            if not hasattr(self, "promises_file"):
-                self.promises_file = self.data_dir / "promises.jsonl"
 
             with open(self.promises_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -848,7 +871,7 @@ class ExperienceBank:
         except Exception as e:
             logger.error(f"[经历银行] 记录承诺失败: {e}")
 
-    def complete_promise(
+    async def complete_promise(
         self, promise_keyword: str, completion_note: str | None = None
     ):
         """
@@ -858,12 +881,26 @@ class ExperienceBank:
             promise_keyword: 承诺的关键词或描述
             completion_note: 完成介绍
         """
+        async with self._file_lock:
+            self._complete_promise_sync(promise_keyword, completion_note)
+
+    def _complete_promise_sync(
+        self, promise_keyword: str, completion_note: str | None = None
+    ):
         try:
-            if not hasattr(self, "promises_file"):
+            if not self.promises_file.exists():
                 return
 
             with open(self.promises_file, encoding="utf-8") as f:
-                promises = [json.loads(line) for line in f]
+                promises = []
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        promises.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
 
             updated = False
             for promise in promises:
@@ -875,9 +912,7 @@ class ExperienceBank:
                     updated = True
 
             if updated:
-                with open(self.promises_file, "w", encoding="utf-8") as f:
-                    for promise in promises:
-                        f.write(json.dumps(promise, ensure_ascii=False) + "\n")
+                atomic_write_json(self.promises_file, promises)
                 logger.info(f"[经历银行] 承诺已完成: {promise_keyword}")
 
         except Exception as e:
@@ -898,17 +933,15 @@ class ExperienceBank:
             mood: 情绪 (开心/中性/沮丧)
         """
         try:
+            now = datetime.now()
             record = {
-                "timestamp": datetime.now().isoformat(),
-                "hour": datetime.now().hour,
+                "timestamp": now.isoformat(),
+                "hour": now.hour,
                 "state": state,
                 "energy_level": energy_level,
                 "creativity_level": creativity_level,
                 "mood": mood,
             }
-
-            if not hasattr(self, "circadian_file"):
-                self.circadian_file = self.data_dir / "circadian.jsonl"
 
             with open(self.circadian_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -935,16 +968,14 @@ class ExperienceBank:
             metadata: 其他元数据
         """
         try:
+            now = datetime.now()
             record = {
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": now.isoformat(),
                 "context_type": context_type,
                 "traits": traits,
                 "tone": tone,
                 "metadata": metadata or {},
             }
-
-            if not hasattr(self, "personality_file"):
-                self.personality_file = self.data_dir / "personalities.jsonl"
 
             with open(self.personality_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -959,11 +990,19 @@ class ExperienceBank:
         获取指定场景的人格描述
         """
         try:
-            if not hasattr(self, "personality_file"):
+            if not self.personality_file.exists():
                 return None
 
             with open(self.personality_file, encoding="utf-8") as f:
-                personalities = [json.loads(line) for line in f]
+                personalities = []
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        personalities.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
 
             # 返回最新的匹配上下文类型
             matching = [
@@ -1039,7 +1078,15 @@ class ExperienceBank:
         try:
             # 获取所有经历
             with open(self.events_file, encoding="utf-8") as f:
-                events = [json.loads(line) for line in f if line.strip()]
+                events = []
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        events.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
 
             # 分析连贯性
             coherence = self.timeline_verifier.analyze_experience_coherence(events)

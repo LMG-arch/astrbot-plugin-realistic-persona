@@ -60,15 +60,18 @@ class AutoPublish:
         self.today_publish_count = 0
         self.last_publish_date = ""
 
+        logger.info(
+            f"[自动发说说] 已初始化，每天{self.publish_times_per_day}次，时间段{self.publish_time_ranges}"
+        )
+
+    async def start(self):
+        """显式启动调度器（应由异步上下文调用）"""
         self.scheduler.start()
         self._schedule_daily_posts()
         self._schedule_insomnia_check()
         if self.config.get("enable_auto_reply_comments", True):
             self._schedule_comment_check()
-
-        logger.info(
-            f"[自动发说说] 已启动，每天{self.publish_times_per_day}次，时间段{self.publish_time_ranges}"
-        )
+        logger.info("[自动发说说] 调度器已启动")
 
     @staticmethod
     def _auto_generate_time_ranges(count: int) -> list[str]:
@@ -180,6 +183,7 @@ class AutoPublish:
         )
 
         # 根据配置的次数和时间段，生成随机时间点
+        scheduled_count = 0
         for i in range(self.publish_times_per_day):
             # 选择一个时间段
             time_range = self.publish_time_ranges[i % len(self.publish_time_ranges)]
@@ -216,9 +220,12 @@ class AutoPublish:
                         random_minute = final_total_minutes % 60
                 else:
                     # 普通情况
-                    random_total_minutes = random.randint(
-                        start_total_minutes, end_total_minutes
-                    )
+                    if start_total_minutes >= end_total_minutes:
+                        random_total_minutes = start_total_minutes
+                    else:
+                        random_total_minutes = random.randint(
+                            start_total_minutes, end_total_minutes
+                        )
                     random_hour = random_total_minutes // 60
                     random_minute = random_total_minutes % 60
             else:
@@ -226,7 +233,11 @@ class AutoPublish:
                 start_hour, end_hour = map(int, time_range.split("-"))
 
                 # 在该时间段内随机选择一个时间
-                random_hour = random.randint(start_hour, end_hour - 1)
+                if start_hour >= end_hour:
+                    # start equals or exceeds end, use start hour only
+                    random_hour = start_hour
+                else:
+                    random_hour = random.randint(start_hour, end_hour - 1)
                 random_minute = random.randint(0, 59)
 
             # 计算目标时间
@@ -254,6 +265,13 @@ class AutoPublish:
             )
             logger.info(
                 f"[自动发说说] 安排今天第{i + 1}次发布: {target_time.strftime('%H:%M')}"
+            )
+            scheduled_count += 1
+
+        if scheduled_count == 0:
+            logger.warning(
+                f"[自动发说说] 所有计划时间均已过去，今天无法安排任何发布任务。"
+                f" 时间段: {self.publish_time_ranges}"
             )
 
     def _schedule_insomnia_check(self):
@@ -292,11 +310,9 @@ class AutoPublish:
         """执行发布任务"""
         try:
             # 检查今日发布次数（失眠不计入）
-            today_str = datetime.now(self.timezone).strftime("%Y-%m-%d")
-            if self.last_publish_date != today_str:
-                self.today_publish_count = 0
-                self.last_publish_date = today_str
-
+            # Note: Counter reset is handled by _reset_and_schedule_today at
+            # midnight; do NOT reset here to avoid a race where a midnight
+            # publish and the scheduled reset collide.
             if not insomnia:
                 if self.today_publish_count >= self.publish_times_per_day:
                     logger.debug(

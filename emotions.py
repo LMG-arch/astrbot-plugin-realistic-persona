@@ -4,6 +4,7 @@
 """
 
 import random
+from collections import deque
 from enum import Enum
 
 from astrbot.api import logger
@@ -22,6 +23,22 @@ class EmotionType(Enum):
     CURIOUS = "好奇"
     SURPRISED = "惊讶"
     ANXIOUS = "焦虑"
+
+
+# Shared emotion-to-intensity mapping for profile updates and thinking triggers.
+# Used by both main.py (bot emotion path) and profile_manager.py (thinking path).
+EMOTION_INTENSITY_MAP = {
+    EmotionType.EXCITED: 0.8,
+    EmotionType.HAPPY: 0.65,
+    EmotionType.SAD: 0.65,
+    EmotionType.ANGRY: 0.65,
+    EmotionType.SURPRISED: 0.5,
+    EmotionType.ANXIOUS: 0.6,
+    EmotionType.BORED: 0.4,
+    EmotionType.CONFUSED: 0.35,
+    EmotionType.CURIOUS: 0.45,
+    EmotionType.CALM: 0.15,
+}
 
 
 class EmotionAnalyzer:
@@ -73,7 +90,6 @@ class EmotionAnalyzer:
             "❓",
             "？？？",
             "啊？",
-            "什么",
             "懵",
         ],
         EmotionType.BORED: ["无聊", "无趣", "没意思", "😴", "枯燥", "烦闷"],
@@ -90,6 +106,17 @@ class EmotionAnalyzer:
         ],
         EmotionType.ANXIOUS: ["焦虑", "担心", "紧张", "😰", "害怕", "不安", "忐忑"],
     }
+
+    _EMOTION_KEYWORDS_LOWER: dict[EmotionType, list[str]] = {}
+
+    @classmethod
+    def _get_lower_keywords(cls) -> dict[EmotionType, list[str]]:
+        if not cls._EMOTION_KEYWORDS_LOWER:
+            cls._EMOTION_KEYWORDS_LOWER = {
+                emotion: [kw.lower() for kw in keywords]
+                for emotion, keywords in cls.EMOTION_KEYWORDS.items()
+            }
+        return cls._EMOTION_KEYWORDS_LOWER
 
     # 情绪对应的AI行为触发
     EMOTION_TRIGGERS = {
@@ -125,28 +152,24 @@ class EmotionAnalyzer:
     }
 
     @classmethod
-    def analyze_emotion(
-        cls, message: str, context: dict | None = None
-    ) -> EmotionType | None:
+    def analyze_emotion(cls, message: str) -> EmotionType | None:
         """
         分析消息中的情绪
 
         Args:
             message: 用户消息
-            context: 上下文信息（可选）
 
         Returns:
             检测到的情绪类型，如果没有检测到则返回None
         """
         message_lower = message.lower()
 
-        # 统计每种情绪的匹配得分
         emotion_scores = {}
 
-        for emotion, keywords in cls.EMOTION_KEYWORDS.items():
+        for emotion, keywords_lower in cls._get_lower_keywords().items():
             score = 0
-            for keyword in keywords:
-                if keyword.lower() in message_lower:
+            for keyword in keywords_lower:
+                if keyword in message_lower:
                     score += 1
 
             if score > 0:
@@ -254,7 +277,7 @@ class EmotionAnalyzer:
         message_lower = message.lower()
         result = any(keyword in message_lower for keyword in selfie_keywords)
         if result:
-            logger.debug(f"[SELFIE REQUEST] 检测到明确自拍请求: {message}")
+            logger.debug(f"[SELFIE REQUEST] 检测到明确自拍请求: {message[:50]}...")
         return result
 
 
@@ -262,18 +285,14 @@ class EmotionContext:
     """情绪上下文管理"""
 
     def __init__(self):
-        self.emotion_history: list[dict] = []
-        self.max_history = 10
+        self.max_history: int = 10
+        self.emotion_history: deque[dict] = deque(maxlen=self.max_history)
 
     def add_emotion(self, emotion: EmotionType, message: str, timestamp: float):
         """添加情绪记录"""
         self.emotion_history.append(
             {"emotion": emotion, "message": message, "timestamp": timestamp}
         )
-
-        # 保持历史记录在限制内
-        if len(self.emotion_history) > self.max_history:
-            self.emotion_history.pop(0)
 
     def get_recent_emotion(self) -> EmotionType | None:
         """获取最近的情绪"""

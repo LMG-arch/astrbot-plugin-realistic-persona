@@ -1,8 +1,10 @@
 # qzone_api.py
 
+import asyncio
 import base64
 import datetime
 import json
+import random
 import re
 import time
 from http.cookies import SimpleCookie
@@ -69,12 +71,17 @@ class Qzone:
     DETAIL_URL = "https://h5.qzone.qq.com/proxy/domain/taotao.qq.com/cgi-bin/emotion_cgi_msgdetail_v6"
 
     def __init__(self, client: CQHttp) -> None:
-        self._session = aiohttp.ClientSession(
-            connector=aiohttp.TCPConnector(limit=100, ssl=False),
-            timeout=aiohttp.ClientTimeout(total=10),
-        )
+        self._session: aiohttp.ClientSession | None = None
         self.client = client
         self.ctx: QzoneContext = None  # type: ignore
+
+    def _ensure_session(self) -> aiohttp.ClientSession:
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(limit=100),
+                timeout=aiohttp.ClientTimeout(total=10),
+            )
+        return self._session
 
     async def login(self) -> bool:
         logger.info("正在登录QQ空间...")
@@ -83,7 +90,10 @@ class Qzone:
                 await self.client.get_cookies(domain="user.qzone.qq.com")
             ).get("cookies", "")
             c = {k: v.value for k, v in SimpleCookie(cookie_str).items()}
-            uin = int(c.get("uin", "0")[1:])
+            uin_str = c.get("uin", "0")
+            if not uin_str.startswith("o"):
+                raise RuntimeError(f"Cookie 中 uin 格式异常，缺少 'o' 前缀: {uin_str!r}")
+            uin = int(uin_str[1:])
             if not uin:
                 raise RuntimeError("Cookie 中缺少合法 uin")
             self.ctx = QzoneContext(
@@ -100,6 +110,102 @@ class Qzone:
         if not self.ctx:
             await self.login()
 
+    MAX_RETRIES = 3
+
+    async def _send_request(
+        self,
+        method: str,
+        url: str,
+        params: dict[str, Any] | None,
+        data: dict[str, Any] | None,
+        headers: dict[str, str] | None,
+        timeout: int,
+    ) -> tuple[int, str]:
+        session = self._ensure_session()
+        async with session.request(
+            method.upper(),
+            url,
+            params=params,
+            data=data,
+            headers=headers or self.ctx.headers(),
+            cookies=self.ctx.cookies(),
+            timeout=aiohttp.ClientTimeout(total=timeout),
+        ) as resp:
+            resp_text = await resp.text()
+            return resp.status, resp_text
+
+    def _parse_json(self, resp_text: str, debug: bool = False) -> dict:
+        json_str = ""
+        if m := re.search(
+            r"callback\s*\(\s*([^{]*(\{.*\})[^)]*)\s*\)", resp_text, re.I | re.S
+        ):
+            json_str = m.group(2)
+        else:
+            start = resp_text.find("{")
+            end = resp_text.rfind("}")
+            if start == -1 or end == -1 or end <= start:
+                raise ValueError("响应中未找到JSON对象")
+            json_str = resp_text[start : end + 1]
+        json_str = json_str.replace("undefined", "null")
+        try:
+            parse_data = json5.loads(json_str.strip())
+            if not isinstance(parse_data, dict):
+                raise RuntimeError("JSON 解析结果不是字典类型")
+            if debug:
+                logger.debug(f"解析数据: {parse_data}")
+            return parse_data
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON 解析错误: {e}")
+            raise
+
+    async def _handle_server_error(self, status: int, attempt: int) -> bool:
+        if status in [500, 502, 503]:
+            if attempt < self.MAX_RETRIES:
+                wait = min(30, (2 ** attempt) + random.uniform(0, 1))
+                logger.warning(
+                    f"[QQ空间] 服务器错误({status})，{wait:.1f}秒后重试 ({attempt}/{self.MAX_RETRIES})..."
+                )
+                await asyncio.sleep(wait)
+                return True
+            raise RuntimeError(
+                f"请求失败，状态码: {status}（重试{self.MAX_RETRIES}次后仍失败）"
+            )
+        return False
+
+    async def _handle_rate_limit(self, attempt: int) -> bool:
+        if attempt < self.MAX_RETRIES:
+            wait = min(30, (2 ** attempt) + random.uniform(0, 1))
+            logger.warning(
+                f"[QQ空间] 触发限流(-10000)，等待 {wait:.1f}秒重试 ({attempt}/{self.MAX_RETRIES})..."
+            )
+            await asyncio.sleep(wait)
+            return True
+        raise RuntimeError(f"限流重试{self.MAX_RETRIES}次后仍失败")
+
+    async def _handle_auth_expired(
+        self,
+        status: int,
+        code: int | None,
+        params: dict[str, Any] | None,
+        data: dict[str, Any] | None,
+    ) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None]:
+        if status in [401, 403] or code == -3000:
+            logger.warning(
+                f"请求失败: {status}，code: {code}，正在尝试重新登录QQ空间..."
+            )
+            if not await self.login():
+                raise RuntimeError("重新登录失败，无法继续请求")
+            if params:
+                params = {**params, "g_tk": self.ctx.gtk2}
+                if "uin" in params:
+                    params["uin"] = self.ctx.uin
+            if data:
+                data = {**data, "p_skey": self.ctx.p_skey, "skey": self.ctx.skey}
+                if "uin" in data:
+                    data["uin"] = self.ctx.uin
+            return True, params, data
+        return False, params, data
+
     async def _request(
         self,
         method: str,
@@ -109,126 +215,46 @@ class Qzone:
         data: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         timeout: int = 10,
-        retry_count: int = 0,
         debug: bool = False,
     ) -> tuple[bool, dict]:
-        """aiohttp 包装"""
-        if retry_count > 2:  # 限制递归深度
-            raise RuntimeError("请求失败，重试次数过多")
-
+        """aiohttp 包装（迭代重试）"""
         if method.upper() not in ["GET", "POST", "PUT", "DELETE"]:
             raise ValueError(f"无效的请求方法: {method}")
 
-        # 发起请求
-        async with self._session.request(
-            method.upper(),
-            url,
-            params=params,
-            data=data,
-            headers=headers or self.ctx.headers(),
-            cookies=self.ctx.cookies(),
-            timeout=aiohttp.ClientTimeout(total=timeout),
-        ) as resp:
-            # 状态码处理
-            if resp.status in [500, 502, 503]:
-                # QQ服务器内部错误，重试
-                if retry_count < 2:
-                    import asyncio
+        for attempt in range(1, self.MAX_RETRIES + 1):
+            status, resp_text = await self._send_request(
+                method, url, params, data, headers, timeout
+            )
 
-                    wait = 3 * (retry_count + 1)
-                    logger.warning(
-                        f"[QQ空间] 服务器错误({resp.status})，{wait}秒后重试 ({retry_count + 1}/3)..."
-                    )
-                    await asyncio.sleep(wait)
-                    return await self._request(
-                        method,
-                        url,
-                        params=params,
-                        data=data,
-                        headers=headers or self.ctx.headers(),
-                        timeout=timeout,
-                        retry_count=retry_count + 1,
-                        debug=debug,
-                    )
-                raise RuntimeError(
-                    f"请求失败，状态码: {resp.status}（重试{retry_count}次后仍失败）"
-                )
-            if resp.status not in [200, 401, 403]:
-                raise RuntimeError(f"请求失败，状态码: {resp.status}")
+            if await self._handle_server_error(status, attempt):
+                continue
+            if status == 429:
+                if await self._handle_rate_limit(attempt):
+                    continue
+                raise RuntimeError(f"请求失败，状态码: 429（重试{self.MAX_RETRIES}次后仍失败）")
+            if status not in [200, 401, 403]:
+                raise RuntimeError(f"请求失败，状态码: {status}")
 
-            # 处理响应数据
-            resp_text = await resp.text()
             if debug:
                 logger.debug(f"响应数据: {resp_text}")
 
-            # 尝试解析 JSON
-            json_str = ""
-            if m := re.search(
-                r"callback\s*\(\s*([^{]*(\{.*\})[^)]*)\s*\)", resp_text, re.I | re.S
-            ):
-                json_str = m.group(2)
-            else:
-                json_str = resp_text[resp_text.find("{") : resp_text.rfind("}") + 1]
-            json_str = json_str.replace("undefined", "null")
-            try:
-                parse_data = json5.loads(json_str.strip())
-                if not isinstance(parse_data, dict):
-                    raise RuntimeError("JSON 解析结果不是字典类型")
-                if debug:
-                    logger.debug(f"解析数据: {parse_data}")
-            except json.JSONDecodeError as e:
-                logger.error(f"JSON 解析错误: {e}")
-                raise
-
-            # 重登机制
+            parse_data = self._parse_json(resp_text, debug)
             code = parse_data.get("code")
-            if resp.status in [401, 403] or code == -3000:
-                logger.warning(
-                    f"请求失败: {resp.status}，解析数据: {parse_data}, 正在尝试重新登录QQ空间..."
-                )
-                if not await self.login():
-                    raise RuntimeError("重新登录失败，无法继续请求")
-                # ✅ 重新构造参数（此时 self.ctx 已更新）
-                if params:
-                    params["g_tk"] = self.ctx.gtk2
-                    if "uin" in params:
-                        params["uin"] = self.ctx.uin
-                if data:
-                    data["p_skey"] = self.ctx.p_skey
-                    data["skey"] = self.ctx.skey
-                    if "uin" in data:
-                        data["uin"] = self.ctx.uin
-                return await self._request(
-                    method,
-                    url,
-                    params=params,
-                    data=data,
-                    headers=headers or self.ctx.headers(),
-                    timeout=timeout,
-                    retry_count=retry_count + 1,
-                )
-            # 限流重试: -10000 表示"使用人数过多，请稍后再试"
-            if code == -10000:
-                logger.warning(
-                    f"[QQ空间] 触发限流(-10000)，等待重试 ({retry_count + 1}/3)..."
-                )
-                import asyncio
 
-                await asyncio.sleep(3 * (retry_count + 1))  # 递增等待: 3s, 6s, 9s
-                return await self._request(
-                    method,
-                    url,
-                    params=params,
-                    data=data,
-                    headers=headers or self.ctx.headers(),
-                    timeout=timeout,
-                    retry_count=retry_count + 1,
-                    debug=debug,
-                )
+            auth_expired, params, data = await self._handle_auth_expired(status, code, params, data)
+            if auth_expired:
+                continue
+
+            if code == -10000:
+                if await self._handle_rate_limit(attempt):
+                    continue
+
             if code:
                 logger.warning(f"请求失败: {code}，解析数据: {parse_data}")
                 return False, {"code": code, "message": parse_data.get("message")}
             return True, parse_data
+
+        raise RuntimeError("请求失败，重试次数过多")
 
     async def _upload_image(self, image: bytes) -> dict:
         """上传单张图片"""
@@ -667,7 +693,7 @@ class Qzone:
     @staticmethod
     def parse_recent_feeds(data: dict) -> list[Post]:
         """解析最近说说列表"""
-        feeds: list = data.get("data", {}).get("data", {})
+        feeds: list = data.get("data", {}).get("data", [])
         if not feeds:
             return []
         try:
@@ -800,4 +826,5 @@ class Qzone:
             return []
 
     async def terminate(self) -> None:
-        await self._session.close()
+        if self._session and not self._session.closed:
+            await self._session.close()

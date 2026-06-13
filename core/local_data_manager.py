@@ -219,13 +219,21 @@ class LocalDataManager:
                 dates_to_remove = []
 
                 for date_str, item_data in data.items():
-                    if "timestamp" in item_data:
+                    if isinstance(item_data, dict) and "timestamp" in item_data:
                         try:
                             item_time = datetime.fromisoformat(item_data["timestamp"])
                             if (current_time - item_time).days > days_to_keep:
                                 dates_to_remove.append(date_str)
                         except ValueError:
                             # 时间格式错误，移除该项
+                            dates_to_remove.append(date_str)
+                    elif isinstance(item_data, list):
+                        # List-type entries (e.g. drawing_prompts): date_str is the key
+                        try:
+                            item_time = datetime.strptime(date_str, "%Y-%m-%d")
+                            if (current_time - item_time).days > days_to_keep:
+                                dates_to_remove.append(date_str)
+                        except ValueError:
                             dates_to_remove.append(date_str)
 
                 for date_str in dates_to_remove:

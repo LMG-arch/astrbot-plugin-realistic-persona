@@ -344,7 +344,7 @@ class ThoughtEngine:
                     weather_key = "sunny"
 
             # 选择思考内容
-            thoughts = self.TIME_BASED_THOUGHTS.get(time_key, [])
+            thoughts = list(self.TIME_BASED_THOUGHTS.get(time_key, []))
             if weather_key and weather_key in self.TIME_BASED_THOUGHTS:
                 thoughts.extend(self.TIME_BASED_THOUGHTS[weather_key])
 

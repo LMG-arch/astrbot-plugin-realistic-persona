@@ -2,8 +2,10 @@ import asyncio
 import json
 import random
 import re
+import uuid
 from datetime import datetime
 from typing import Any
+from urllib.parse import quote
 
 import aiohttp
 from aiocqhttp import CQHttp
@@ -92,10 +94,20 @@ class LLMAction:
                     logger.warning(f"[绘图] 不支持的平台: {provider}，跳过")
                     continue
 
-            except Exception as e:
+            except (
+                aiohttp.ClientError,
+                asyncio.TimeoutError,
+                json.JSONDecodeError,
+                ValueError,
+                KeyError,
+            ) as e:
                 logger.warning(f"[绘图] {provider} 平台调用失败: {e}")
                 last_error = e
-                continue  # 尝试下一个平台
+                continue
+            except Exception as e:
+                logger.warning(f"[绘图] {provider} 平台意外错误: {e}", exc_info=True)
+                last_error = e
+                continue
 
         # 如果所有平台都失败了
         if last_error:
@@ -121,8 +133,8 @@ class LLMAction:
         }
 
         url = f"{self.ms_api_url}v1/images/generations"
-        logger.info(f"[ModelScope] 请求URL: {url}")
-        logger.info(
+        logger.debug(f"[ModelScope] 请求URL: {url.split('?')[0]}")
+        logger.debug(
             f"[ModelScope] 请求参数: model={self.ms_model}, size={size}, prompt={prompt[:50]}..."
         )
 
@@ -134,7 +146,7 @@ class LLMAction:
             ) as resp:
                 resp_text = await resp.text()
                 logger.info(f"[ModelScope] 响应状态: {resp.status}")
-                logger.info(f"[ModelScope] 响应内容: {resp_text[:1000]}...")
+                logger.debug(f"[ModelScope] 响应内容(截断): {resp_text[:200]}...")
 
                 if resp.status != 200:
                     logger.error(f"[ModelScope] API调用失败: HTTP {resp.status}")
@@ -145,7 +157,7 @@ class LLMAction:
 
                 try:
                     data = json.loads(resp_text)
-                    logger.info(f"[ModelScope] 解析后的数据键: {list(data.keys())}")
+                    logger.debug(f"[ModelScope] 解析后的数据键: {list(data.keys())}")
                 except json.JSONDecodeError as e:
                     logger.error(f"[ModelScope] 响应解析失败: {e}")
                     raise ValueError(f"ModelScope 响应解析失败: {e}")
@@ -180,8 +192,8 @@ class LLMAction:
             delay = 1
             max_retries = 30
             retry_count = 0
-            while retry_count < max_retries:
-                async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession() as session:
+                while retry_count < max_retries:
                     async with session.get(
                         f"{self.ms_api_url}v1/tasks/{task_id}",
                         headers={
@@ -212,9 +224,9 @@ class LLMAction:
                                 f"[ModelScope] 查询任务状态失败: HTTP {r2.status}"
                             )
 
-                await asyncio.sleep(delay)
-                delay = min(delay * 2, 10)
-                retry_count += 1
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, 10)
+                    retry_count += 1
 
             if retry_count >= max_retries:
                 logger.error(f"[ModelScope] 任务超时，重试{max_retries}次后仍未完成")
@@ -239,13 +251,15 @@ class LLMAction:
         )
         images_dir.mkdir(parents=True, exist_ok=True)
 
-        # 生成文件名（使用时间戳）
+        # 生成文件名（使用时间戳 + UUID 避免并发冲突）
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"generated_{timestamp}.png"
+        short_uuid = uuid.uuid4().hex[:8]
+        filename = f"generated_{timestamp}_{short_uuid}.png"
         local_path = images_dir / filename
 
         # 下载图片
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=60)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url) as resp:
                 resp.raise_for_status()
                 content = await resp.read()
@@ -293,8 +307,8 @@ class LLMAction:
         }
 
         url = f"{openai_api_url}/images/generations"
-        logger.info(f"[OpenAI DALL-E] 请求URL: {url}")
-        logger.info(
+        logger.debug(f"[OpenAI DALL-E] 请求URL: {url.split('?')[0]}")
+        logger.debug(
             f"[OpenAI DALL-E] 请求参数: size={openai_size}, prompt={prompt[:50]}..."
         )
 
@@ -302,7 +316,7 @@ class LLMAction:
             async with session.post(url, headers=headers, json=payload) as resp:
                 resp_text = await resp.text()
                 logger.info(f"[OpenAI DALL-E] 响应状态: {resp.status}")
-                logger.info(f"[OpenAI DALL-E] 响应内容: {resp_text[:1000]}...")
+                logger.debug(f"[OpenAI DALL-E] 响应内容(截断): {resp_text[:200]}...")
 
                 if resp.status != 200:
                     logger.error(f"[OpenAI DALL-E] API调用失败: HTTP {resp.status}")
@@ -374,8 +388,8 @@ class LLMAction:
         }
 
         url = f"{aliyun_api_url}/services/aigc/text2image"
-        logger.info(f"[阿里云通义万相] 请求URL: {url}")
-        logger.info(
+        logger.debug(f"[阿里云通义万相] 请求URL: {url.split('?')[0]}")
+        logger.debug(
             f"[阿里云通义万相] 请求参数: size={ali_size}, prompt={prompt[:50]}..."
         )
 
@@ -383,7 +397,7 @@ class LLMAction:
             async with session.post(url, headers=headers, json=payload) as resp:
                 resp_text = await resp.text()
                 logger.info(f"[阿里云通义万相] 响应状态: {resp.status}")
-                logger.info(f"[阿里云通义万相] 响应内容: {resp_text[:1000]}...")
+                logger.debug(f"[阿里云通义万相] 响应内容(截断): {resp_text[:200]}...")
 
                 if resp.status != 200:
                     logger.error(f"[阿里云通义万相] API调用失败: HTTP {resp.status}")
@@ -429,11 +443,13 @@ class LLMAction:
             return ""
         try:
             async with aiohttp.ClientSession() as session:
-                url = f"https://wttr.in/{self.weather_location}?format=3&lang=zh-cn"
-                async with session.get(url, timeout=5) as resp:
+                url = f"https://wttr.in/{quote(self.weather_location, safe='')}?format=3&lang=zh-cn"
+                async with session.get(
+                    url, timeout=aiohttp.ClientTimeout(total=10)
+                ) as resp:
                     if resp.status == 200:
                         return (await resp.text()).strip()
-        except Exception:
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, KeyError):
             return ""
         return ""
 
@@ -444,9 +460,12 @@ class LLMAction:
         contexts: list[dict[str, str]] = []
         for msg in round_messages:
             text_segments = [
-                seg["data"]["text"] for seg in msg["message"] if seg["type"] == "text"
+                seg.get("data", {}).get("text", "")
+                for seg in msg.get("message", [])
+                if seg.get("type") == "text"
             ]
-            text = f"{msg['sender']['nickname']}: {''.join(text_segments).strip()}"
+            sender_name = msg.get("sender", {}).get("nickname", "unknown")
+            text = f"{sender_name}: {''.join(text_segments).strip()}"
             if text:
                 contexts.append({"role": "user", "content": text})
         return contexts
@@ -497,8 +516,11 @@ class LLMAction:
             logger.info(f"从用户 {user_id} 获取了 {len(contexts)} 条私聊消息")
             return contexts[:max_count]  # 限制最大数量
 
-        except Exception as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, KeyError) as e:
             logger.error(f"获取私聊历史失败: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"获取私聊历史意外错误: {e}", exc_info=True)
             return []
 
     async def _get_msg_contexts(
@@ -523,6 +545,9 @@ class LLMAction:
             result: dict = await self.client.api.call_action(
                 "get_group_msg_history", **payloads
             )
+            if not result or "messages" not in result:
+                logger.debug(f"获取群 {group_id} 的历史消息失败")
+                break
             round_messages = result["messages"]
             if not round_messages:
                 break
@@ -667,7 +692,7 @@ class LLMAction:
             response = await provider.text_chat(
                 system_prompt=system_prompt, prompt=prompt
             )
-            summary = response.completion_text.strip()
+            summary = (response.completion_text or "").strip()
 
             # 如果摘要太长，进一步截断
             if len(summary) > 500:
@@ -776,7 +801,8 @@ class LLMAction:
             "长度控制在 2-3 句话以内，每句话不超过 30 字。",
         ]
         if persona_profile:
-            life_header.append(f"以下是你的角色设定，请保持一致：{persona_profile}")
+            # Truncate persona_profile to prevent prompt injection via excessively long input
+            life_header.append(f"以下是你的角色设定，请保持一致：{persona_profile[:500]}")
         if weather_desc:
             life_header.append(f"你所在城市的天气概况：{weather_desc}")
         if schedule_text:
@@ -879,7 +905,7 @@ class LLMAction:
                 system_prompt=system_prompt,
                 contexts=compressed_contexts,  # 使用压缩后的上下文
             )
-            diary = self.extract_content(llm_response.completion_text)
+            diary = self.extract_content(llm_response.completion_text or "")
             logger.info(f"LLM 生成的日记：{diary}")
             return diary
 
@@ -913,7 +939,7 @@ class LLMAction:
                 prompt=prompt,
                 image_urls=post.images,
             )
-            comment = re.sub(r"[\s\u3000]+", "", llm_response.completion_text).rstrip(
+            comment = re.sub(r"[\s\u3000]+", "", llm_response.completion_text or "").rstrip(
                 "。"
             )
             logger.info(f"LLM 生成的评论：{comment}")
@@ -1223,10 +1249,8 @@ class LLMAction:
                 ):
                     current_activity = line
                     break
-                elif (
-                    current_hour >= 23
-                    or current_hour < 6
-                    and ("睡前" in line or "睡觉" in line or "洗漱" in line)
+                elif (current_hour >= 23 or current_hour < 6) and (
+                    "睡前" in line or "睡觉" in line or "洗漱" in line
                 ):
                     current_activity = line
                     break

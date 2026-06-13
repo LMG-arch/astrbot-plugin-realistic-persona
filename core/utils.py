@@ -1,5 +1,9 @@
+import json
+import os
+import tempfile
 from collections.abc import Sequence
-from typing import Union
+from pathlib import Path
+from typing import Any, Union
 
 import aiohttp
 
@@ -11,6 +15,27 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
 )
 
 BytesOrStr = Union[str, bytes]  # noqa: UP007
+
+
+def atomic_write_json(file_path: Path | str, data: Any) -> None:
+    """Atomically write JSON data to a file (write-to-temp then rename)."""
+    file_path = Path(file_path)
+    fd, tmp_path = tempfile.mkstemp(
+        dir=file_path.parent, suffix=".tmp", prefix=".tmp_"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, file_path)
+    except Exception:
+        # Clean up temp file on failure
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def get_ats(event: AiocqhttpMessageEvent) -> list[str]:
@@ -37,22 +62,19 @@ async def get_nickname(event: AiocqhttpMessageEvent, user_id) -> str:
 
 
 async def download_file(url: str) -> bytes | None:
-    """下载图片或读取本地文件"""
-    # 如果是本地路径，直接读取
-    import os
+    """下载图片或读取本地文件（仅允许http/https URL）"""
+    # 安全检查：只允许 http/https 协议
+    if not url.startswith(("http://", "https://")):
+        logger.warning(f"拒绝非HTTP URL: {url}")
+        return None
 
-    if os.path.exists(url):
-        try:
-            with open(url, "rb") as f:
-                return f.read()
-        except Exception as e:
-            logger.error(f"本地文件读取失败: {url}, 错误: {e}")
-            return None
-
-    # 否则从 URL 下载
     try:
-        async with aiohttp.ClientSession() as client:
-            response = await client.get(url, ssl=False)
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(timeout=timeout) as client:
+            response = await client.get(url)
+            if response.status != 200:
+                logger.error(f"图片下载失败: HTTP {response.status}, URL: {url}")
+                return None
             img_bytes = await response.read()
             return img_bytes
     except Exception as e:
@@ -88,7 +110,7 @@ def get_reply_message_str(event: AstrMessageEvent) -> str | None:
             for seg in event.message_obj.message
             if isinstance(seg, Reply)
         ),
-        "",
+        None,
     )
 
 
