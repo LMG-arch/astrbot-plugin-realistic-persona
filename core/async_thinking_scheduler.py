@@ -3,6 +3,8 @@
 管理后台思考线程，定期生成思考和活动记录
 """
 
+import asyncio
+import zoneinfo
 from collections.abc import Callable
 from datetime import datetime
 
@@ -52,7 +54,7 @@ class AsyncThinkingScheduler:
         self.activity_interval_minutes = activity_interval_minutes
 
         # 调度器
-        self.scheduler = AsyncIOScheduler()
+        self.scheduler = AsyncIOScheduler(timezone=zoneinfo.ZoneInfo("Asia/Shanghai"))
 
         # 回调函数
         self.on_weather_changed = on_weather_changed
@@ -115,7 +117,7 @@ class AsyncThinkingScheduler:
                 logger.warning("[异步思考] 调度器未运行")
                 return
 
-            self.scheduler.shutdown()
+            self.scheduler.shutdown(wait=False)
             self.is_running = False
 
             logger.info("[异步思考] 调度器已停止")
@@ -170,8 +172,6 @@ class AsyncThinkingScheduler:
                 # 通知回调（用于人格更新等）
                 if self.on_thought_generated:
                     try:
-                        import asyncio
-
                         result = self.on_thought_generated(thought)
                         if asyncio.iscoroutine(result):
                             await result

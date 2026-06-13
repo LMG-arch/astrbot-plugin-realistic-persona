@@ -7,8 +7,11 @@
 最后更新: 2025-01-01
 """
 
+import json
+import re
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 import aiohttp
 
@@ -32,6 +35,7 @@ class NewsGetter:
         data_dir: Path,
         enable_online_fetch: bool = True,
         topics: list[str] | None = None,
+        session: aiohttp.ClientSession | None = None,
     ):
         """初始化新闻获取器
 
@@ -39,12 +43,14 @@ class NewsGetter:
             data_dir: 数据存储目录
             enable_online_fetch: 是否启用联网获取，默认True
             topics: 关注的新闻主题列表
+            session: 可选的共享 aiohttp.ClientSession，若为 None 则每次请求创建新 session
         """
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
         self.enable_online_fetch = enable_online_fetch
         self.topics = topics or ["科技", "生活方式", "兴趣相关话题"]
+        self._shared_session = session
 
         # 新闻数据缓存文件
         self.news_cache_file = self.data_dir / "news_cache.json"
@@ -52,6 +58,12 @@ class NewsGetter:
         logger.debug(
             f"[新闻获取器] 已初始化，启用联网: {enable_online_fetch}, 主题: {topics}"
         )
+
+    def _get_session(self) -> aiohttp.ClientSession:
+        """Get or create an aiohttp session. Reuses the shared session if provided."""
+        if self._shared_session and not self._shared_session.closed:
+            return self._shared_session
+        return aiohttp.ClientSession()
 
     async def fetch_news_data(self, topics: list[str] | None = None) -> dict | None:
         """获取新闻数据
@@ -115,14 +127,16 @@ class NewsGetter:
             today_str = datetime.now().strftime("%Y-%m-%d")
             url = f"https://benzhi.online/api/daily-news?date={today_str}"
 
-            async with aiohttp.ClientSession() as session:
+            session = self._get_session()
+            try:
                 timeout = aiohttp.ClientTimeout(total=15)
                 async with session.get(url, timeout=timeout) as resp:
                     if resp.status == 200:
                         text = await resp.text()
-                        import re
 
-                        # Parse XML: <item><title>...</title><summary>...</summary><link>...</link></item>
+                        # NOTE: XML parsing via regex is fragile and may break if the
+                        # server changes its XML structure or adds CDATA sections.
+                        # Consider using xml.etree.ElementTree for more robust parsing.
                         items = re.findall(
                             r"<item>\s*<title>(.*?)</title>\s*<summary>(.*?)</summary>\s*<link>(.*?)</link>\s*</item>",
                             text,
@@ -159,6 +173,9 @@ class NewsGetter:
                         logger.debug(
                             f"[新闻获取器] benzhi.online 返回状态码: {resp.status}"
                         )
+            finally:
+                if session is not self._shared_session:
+                    await session.close()
         except Exception as e:
             logger.debug(f"[新闻获取器] benzhi.online API错误: {e}")
 
@@ -176,7 +193,8 @@ class NewsGetter:
         try:
             url = "https://top.baidu.com/board?tab=realtime"
 
-            async with aiohttp.ClientSession() as session:
+            session = self._get_session()
+            try:
                 timeout = aiohttp.ClientTimeout(total=10)
                 headers = {
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -184,7 +202,6 @@ class NewsGetter:
                 async with session.get(url, timeout=timeout, headers=headers) as resp:
                     if resp.status == 200:
                         text = await resp.text()
-                        import re
 
                         # Extract hot search titles from the page
                         titles = re.findall(
@@ -218,6 +235,9 @@ class NewsGetter:
                                 "news": news_list[:3],
                                 "source": "百度热搜",
                             }
+            finally:
+                if session is not self._shared_session:
+                    await session.close()
         except Exception as e:
             logger.debug(f"[新闻获取器] 百度热搜API错误: {e}")
 
@@ -234,9 +254,10 @@ class NewsGetter:
         """
         try:
             topic_query = " ".join(topics[:2])  # 使用前2个主题
-            url = f"https://cn.bing.com/news/search?q={topic_query}&format=rss"
+            url = f"https://cn.bing.com/news/search?q={quote(topic_query, safe='')}&format=rss"
 
-            async with aiohttp.ClientSession() as session:
+            session = self._get_session()
+            try:
                 timeout = aiohttp.ClientTimeout(total=10)
                 headers = {
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -245,10 +266,12 @@ class NewsGetter:
                     if resp.status == 200:
                         text = await resp.text()
                         # 简单的RSS解析
+                        # NOTE: Regex-based XML/RSS parsing is fragile and may break if
+                        # the feed includes CDATA, namespaces, or encoding changes.
+                        # Consider using xml.etree.ElementTree for robust parsing.
                         news_list = []
 
                         # 提取标题（简单正则）
-                        import re
 
                         titles = re.findall(r"<title>([^<]+)</title>", text)
                         for title in titles[
@@ -265,6 +288,9 @@ class NewsGetter:
                                 "news": news_list,
                                 "source": "必应新闻",
                             }
+            finally:
+                if session is not self._shared_session:
+                    await session.close()
         except Exception as e:
             logger.debug(f"[新闻获取器] 必应新闻API错误: {e}")
 
@@ -282,9 +308,10 @@ class NewsGetter:
         try:
             topic_query = topics[0] if topics else "今日新闻"
 
-            url = f"https://news.sogou.com/news?query={topic_query}&sort=1"
+            url = f"https://news.sogou.com/news?query={quote(topic_query, safe='')}&sort=1"
 
-            async with aiohttp.ClientSession() as session:
+            session = self._get_session()
+            try:
                 timeout = aiohttp.ClientTimeout(total=10)
                 headers = {
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -292,7 +319,6 @@ class NewsGetter:
                 async with session.get(url, timeout=timeout, headers=headers) as resp:
                     if resp.status == 200:
                         text = await resp.text()
-                        import re
 
                         # Extract news titles from sogou
                         titles = re.findall(
@@ -320,6 +346,9 @@ class NewsGetter:
                                 "news": news_list,
                                 "source": "搜狗新闻",
                             }
+            finally:
+                if session is not self._shared_session:
+                    await session.close()
         except Exception as e:
             logger.debug(f"[新闻获取器] 搜狗新闻API错误: {e}")
 
@@ -373,13 +402,15 @@ class NewsGetter:
             是否保存成功
         """
         try:
-            import json
-
             # 读取现有缓存
             cache = {}
             if self.news_cache_file.exists():
-                with open(self.news_cache_file, encoding="utf-8") as f:
-                    cache = json.load(f)
+                try:
+                    with open(self.news_cache_file, encoding="utf-8") as f:
+                        cache = json.load(f)
+                except json.JSONDecodeError:
+                    logger.warning("[新闻获取器] 缓存文件损坏，将覆盖重建")
+                    cache = {}
 
             # 更新缓存
             cache[today_str] = news_data
@@ -404,8 +435,6 @@ class NewsGetter:
             新闻数据字典或None
         """
         try:
-            import json
-
             if not self.news_cache_file.exists():
                 return None
 

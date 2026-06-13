@@ -374,6 +374,10 @@ pip install -r requirements.txt
 - 异步编程，性能优化
 - 完善的错误处理
 - 支持热重载
+- Manager 架构（SharedState + BaseManager 模式）
+- 原子文件写入（write-to-temp + rename，防止崩溃丢数据）
+- 异步锁保护并发文件访问
+- 57 项自动化测试覆盖
 
 ## 优化说明
 
@@ -728,10 +732,44 @@ pip install -r requirements.txt
 - v1.20.3: 全面审计配置项——清理死代码、废弃配置和隐藏Bug
   - **移除废弃配置`publish_cron`**：从`_conf_schema.json`中删除已废弃的Cron表达式配置项（早已改用`publish_times_per_day`+`publish_time_ranges`），避免用户困惑
   - **清理`main.py`中6个死属性赋值**：`publish_cron`、`diary_max_msg`、`diary_user_id`、`diary_prompt`、`comment_prompt`、`enable_auto_reply_comments`这6个配置项在`main.py`中被读入`self.*`属性但从未使用——实际由`core/llm_action.py`、`core/operate.py`、`core/scheduler.py`通过`config.get()`直接读取。删除冗余赋值保持代码整洁
-  - **修复`ignore_users`缺失和崩溃**：`core/operate.py`使用`self.
-config["ignore_users"]`直接访问但该配置项未声明在`_conf_schema.json`中，且没有默认值——用户首次使用时会`KeyError`崩溃。添加schema声明+使用`.get()`安全访问
+  - **修复`ignore_users`缺失和崩溃**：`core/operate.py`使用`self.config["ignore_users"]`直接访问但该配置项未声明在`_conf_schema.json`中，且没有默认值——用户首次使用时会`KeyError`崩溃。添加schema声明+使用`.get()`安全访问
   - **修复默认值不一致**：`core/llm_action.py`中`ms_model`默认值`iic/sdxl-turbo`→`Qwen/Qwen-Image`、`size`默认值`1080x1920`→`1024x1024`、`api_url`默认值`api.modelscope.com`→`api-inference.modelscope.cn`；`core/scheduler.py`中`insomnia_probability`默认值`0.2`→`0.15`——统一与schema声明一致
   - **审计结果**：73个配置项全部可正常工作，1个废弃配置已移除，5个冗余赋值已清理，1个隐藏崩溃已修复，默认值全部对齐
+
+- v1.21.0: 全面代码审查与修复——131项问题修复
+  - **全面代码审查**：5个并行审查员对15,000行代码逐行审查，发现并修复131项问题（9 Critical、43 Important、40 Medium、39 Minor）
+  - **架构重构**：
+    - 提取 Manager 架构（SharedState + BaseManager），main.py 从1414行精简
+    - 移除循环导入（`managers/base.py` → `main.py` 的 ThinkingLLM 依赖）
+    - 消除 `_current_event` 全局变量竞争，改为按会话隔离的 `_current_events` 字典
+  - **数据安全**：
+    - 全部16处 `open("w")` + `json.dump` 替换为原子写入（`atomic_write_json`：先写临时文件再 `os.replace`，崩溃不丢数据）
+    - 经验银行、记忆管理器的并发文件访问添加异步锁保护
+    - 自动资料更新器添加 `asyncio.Lock` 防止并发状态竞争
+  - **Bug修复**：
+    - `experience_bank.py`：修复 `_update_relationship` 缺少 `await` 导致关系数据从未更新
+    - `thought_engine.py`：修复类级别静态列表被 `extend()` 修改导致数据永久污染
+    - `timeline_verifier.py`：修复"昨天"映射到今天的日期计算错误
+    - `emotion_manager.py`：消除每条消息重复调用 `analyze_emotion()` 两次的浪费
+    - `scheduler.py`：修复时间范围 `"9-9"` 导致 `ValueError` 崩溃
+    - `life_manager.py`：修复新闻窗口在 `news_hour >= 22` 时全天触发
+    - `async_thinking_scheduler.py`：添加 `Asia/Shanghai` 时区配置，修复定时任务时间错误
+    - `qzone_api.py`：修复 `initialize_qzone()` 双重初始化导致资源泄漏
+  - **安全加固**：
+    - `utils.download_file`：拒绝非 HTTP URL（防止路径遍历）、添加30秒超时、检查 HTTP 状态码
+    - LLM 提示词中的用户输入添加长度截断（`persona_profile`、`original_prompt`、`schedule_text`）
+    - `image_forbidden_rules` 默认值改为空字符串，消除性别偏好
+  - **健壮性提升**：
+    - HTTP 请求全部添加超时（`aiohttp.ClientTimeout`）
+    - JSON/JSONL 解析添加逐行错误处理
+    - 列表增长添加上限（`topics_explored` 100条、`inconsistencies` 100条）
+    - `humor_maturity`/`vocabulary_level` 支持降级（不再只增不减）
+    - QQ空间 API 重试改为指数退避 + 抖动
+    - 情绪关键词移除"什么"（消除大量误报）
+  - **测试完善**：
+    - 重写 `test_managers.py`，匹配实际 SharedState/BaseManager/EmotionManager API
+    - 修复测试导入问题（插件包注册、mock 模块补全）
+    - 57 项测试全部通过
 
 
 ## 致谢

@@ -98,11 +98,13 @@ class PsychologyEngine:
                     "depth": exploration_depth,
                 }
             )
+            # 防止无限增长，保留最近100条
+            drives["curiosity"]["topics_explored"] = drives["curiosity"]["topics_explored"][-100:]
 
             drives["curiosity"]["last_exploration"] = datetime.now().isoformat()
 
             # 好奇心稍微提升
-            drives["curiosity"]["level"] = min(10, drives["curiosity"]["level"] + 0.5)
+            drives["curiosity"]["level"] = round(min(10, drives["curiosity"]["level"] + 0.5), 1)
 
             with open(self.drives_file, "w", encoding="utf-8") as f:
                 json.dump(drives, f, ensure_ascii=False, indent=2)
@@ -142,7 +144,7 @@ class PsychologyEngine:
             drives["expression"]["last_expression"] = datetime.now().isoformat()
 
             # 成功表达后表达欲会降低（满足了）
-            drives["expression"]["level"] = max(1, drives["expression"]["level"] - 0.5)
+            drives["expression"]["level"] = round(max(1, drives["expression"]["level"] - 0.5), 1)
 
             with open(self.drives_file, "w", encoding="utf-8") as f:
                 json.dump(drives, f, ensure_ascii=False, indent=2)
@@ -194,7 +196,7 @@ class PsychologyEngine:
             drives["connection"]["interaction_count"] += 1
 
             # 互动满足连接需求，连接驱力降低
-            drives["connection"]["level"] = max(1, drives["connection"]["level"] - 0.3)
+            drives["connection"]["level"] = round(max(1, drives["connection"]["level"] - 0.3), 1)
 
             with open(self.drives_file, "w", encoding="utf-8") as f:
                 json.dump(drives, f, ensure_ascii=False, indent=2)
@@ -252,14 +254,29 @@ class PsychologyEngine:
             phase: 阶段 (feeling/expression/digestion/reflection)
             note: 阶段备注
         """
+        # NOTE: This read-modify-write operation is not atomic. Concurrent callers
+        # could overwrite each other's changes. A file lock (like asyncio.Lock in
+        # other modules) would be needed for true safety, but is not applied here
+        # to keep this synchronous method simple.
         try:
             if not self.emotion_lifecycle_file.exists():
                 return
 
             with open(self.emotion_lifecycle_file, encoding="utf-8") as f:
-                records = [json.loads(line) for line in f]
+                records = []
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        records.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
 
             # 查找最近的匹配情绪事件
+            # NOTE: Substring matching is intentionally broad but can produce false
+            # positives (e.g., "happy" matches "unhappy"). A future improvement could
+            # use exact-match IDs or keyword-based matching with stopwords.
             matching = [
                 r for r in records if emotion_id.lower() in r.get("event", "").lower()
             ]

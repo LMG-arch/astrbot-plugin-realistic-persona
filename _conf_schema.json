@@ -8,7 +8,8 @@
     "description": "ModelScope API密钥",
     "type": "string",
     "default": "",
-    "hint": "在ModelScope平台获取的API密钥，用于AI绘图功能"
+    "obvious_hint": true,
+    "hint": "⚠️ 敏感信息，请勿泄露"
   },
   "ms_model": {
     "description": "ModelScope绘图模型",
@@ -51,7 +52,8 @@
     "description": "OpenAI API密钥",
     "type": "string",
     "default": "",
-    "hint": "OpenAI账户的API密钥，用于DALL-E绘图功能"
+    "obvious_hint": true,
+    "hint": "⚠️ 敏感信息，请勿泄露"
   },
   "openai_api_url": {
     "description": "OpenAI API基础URL",
@@ -63,7 +65,8 @@
     "description": "阿里云API密钥",
     "type": "string",
     "default": "",
-    "hint": "阿里云通义万相API密钥，用于AI绘图功能"
+    "obvious_hint": true,
+    "hint": "⚠️ 敏感信息，请勿泄露"
   },
   "aliyun_api_url": {
     "description": "阿里云API基础URL",
@@ -81,7 +84,7 @@
   "image_forbidden_rules": {
     "description": "绘画禁止规则",
     "type": "text",
-    "default": "★★★绝对禁止规则：画面中禁止出现任何男性角色、男生、男人、男孩等。只能有女性主角一人，不要添加其他人物。",
+    "default": "",
     "hint": "生成图片时的强制禁止规则，会被添加到绘画提示词中。留空则不添加任何禁止规则。"
   },
   "enable_image_generation_detection": {
@@ -113,6 +116,8 @@
     "description": "自拍触发概率",
     "type": "float",
     "default": 0.3,
+    "min": 0,
+    "max": 1,
     "condition": {"enable_auto_selfie": true},
     "hint": "当检测到符合条件的情绪时，触发自拍的概率(0-1)，建议0.2-0.5"
   },
@@ -126,6 +131,7 @@
     "description": "空闲问候延迟(秒)",
     "type": "int",
     "default": 600,
+    "min": 60,
     "condition": {"enable_proactive_messages": true},
     "hint": "用户空闲多久后发送问候消息"
   },
@@ -134,7 +140,7 @@
     "type": "string",
     "default": "",
     "condition": {"enable_proactive_messages": true},
-    "hint": "指定接收主动消息的会话ID（格式：platform_id:message_type:session_id），多个用逗号分隔。留空则对所有会话生效。可使用 /sessions 命令查看可用会话列表"
+    "hint": "指定接收主动消息的会话ID，多个用逗号分隔。留空则不发送主动消息（需显式配置目标会话）"
   },
   "enable_proactive_sharing": {
     "description": "启用主动分享",
@@ -200,6 +206,8 @@
     "description": "日程生成时间(小时)",
     "type": "int",
     "default": 7,
+    "min": 0,
+    "max": 23,
     "condition": {"enable_life_simulation": true},
     "hint": "每天几点开始生成当天的日程安排(0-23)"
   },
@@ -207,6 +215,8 @@
     "description": "新闻学习时间(小时)",
     "type": "int",
     "default": 7,
+    "min": 0,
+    "max": 23,
     "condition": {"enable_life_simulation": true},
     "hint": "每天几点开始获取当天早间新闻(0-23)，默认早上7点"
   },
@@ -275,6 +285,8 @@
     "description": "每天发说说次数",
     "type": "int",
     "default": 3,
+    "min": 1,
+    "max": 10,
     "condition": {"enable_qzone": true},
     "hint": "每天自动发布说说的次数，建议2-5次较为自然。系统会根据次数自动在活跃时段(9:00-22:00)内均匀分配时间段，如3次→[9-13, 13-18, 18-22]，5次→[9-11, 11-14, 14-17, 17-19, 19-22]。也支持手动指定时间段覆盖"
   },
@@ -289,6 +301,8 @@
     "description": "失眠发说说概率",
     "type": "float",
     "default": 0.15,
+    "min": 0,
+    "max": 1,
     "condition": {"enable_qzone": true},
     "hint": "晚上23:00-02:00之间随机发失眠说说的概率（0-1之间），0表示不发，0.15表示15%概率，建议0.1-0.3"
   },
@@ -296,6 +310,8 @@
     "description": "日记最大消息数",
     "type": "int",
     "default": 200,
+    "min": 1,
+    "max": 500,
     "condition": {"enable_qzone": true},
     "hint": "生成日记时最多读取的群聊消息条数"
   },
@@ -303,6 +319,8 @@
     "description": "对话历史最大轮数",
     "type": "int",
     "default": 10,
+    "min": 1,
+    "max": 50,
     "hint": "在与LLM交互时保留的最大对话轮数，超出部分将被压缩或丢弃以节省token"
   },
   "enable_history_compression": {
@@ -315,6 +333,7 @@
     "description": "历史压缩阈值(字符数)",
     "type": "int",
     "default": 2000,
+    "min": 100,
     "condition": {"enable_history_compression": true},
     "hint": "当对话历史超过此字符数时自动触发压缩机制"
   },
@@ -350,6 +369,7 @@
     "description": "QQ空间评论检查间隔（分钟）",
     "type": "int",
     "default": 60,
+    "min": 10,
     "condition": {"enable_qzone": true},
     "hint": "自动回复QQ空间评论的定时检查间隔，单位为分钟。默认60分钟。"
   },
@@ -377,6 +397,7 @@
     "description": "思考触发间隔(分钟)",
     "type": "int",
     "default": 20,
+    "min": 5,
     "condition": {"enable_async_thinking": true},
     "hint": "每隔多少分钟触发一次内心独白/深度思考。思考时会结合人设、当前日程、天气、最近新闻、对话历史和经历银行内容。建议15-30分钟"
   },
@@ -384,6 +405,7 @@
     "description": "活动记录间隔(分钟)",
     "type": "int",
     "default": 25,
+    "min": 5,
     "condition": {"enable_async_thinking": true},
     "hint": "每隔多少分钟记录一次日常活动。活动内容由LLM根据当前时间段和人设生成（如'泡了杯咖啡，翻看论文'），而非随机模板。建议20-40分钟"
   },
@@ -424,6 +446,7 @@
     "description": "更新冷却时间(秒)",
     "type": "int",
     "default": 1800,
+    "min": 60,
     "condition": {"enable_auto_profile_update": true},
     "hint": "两次更新之间的最小间隔时间，默认 30 分钟（1800秒）"
   },
@@ -431,6 +454,8 @@
     "description": "情绪变化阈值",
     "type": "float",
     "default": 0.6,
+    "min": 0,
+    "max": 1,
     "condition": {"enable_auto_profile_update": true},
     "hint": "触发更新的情绪强度阈值 (0-1)，越高越不容易触发"
   },
@@ -445,6 +470,7 @@
     "description": "每天最大更新次数",
     "type": "int",
     "default": 3,
+    "min": 0,
     "condition": {"enable_auto_profile_update": true},
     "hint": "限制每天最多更新个人资料的次数（含对话触发+思考触发），避免频繁修改"
   },
@@ -452,8 +478,25 @@
     "description": "每周最大更新次数",
     "type": "int",
     "default": 10,
+    "min": 0,
     "condition": {"enable_auto_profile_update": true},
     "hint": "限制每周最多更新个人资料的次数，取0表示不限制"
+  },
+  "avatar_max_per_day": {
+    "description": "头像每天最大更新次数",
+    "type": "int",
+    "default": 1,
+    "min": 0,
+    "max": 5,
+    "condition": {"enable_auto_avatar": true},
+    "hint": "限制头像每天最多更新次数（独立于全局每日更新次数），默认1次。头像更新较显眼，建议保持1次"
+  },
+  "enable_auto_tag": {
+    "description": "启用标签建议生成",
+    "type": "bool",
+    "default": false,
+    "condition": {"enable_auto_profile_update": true},
+    "hint": "根据情绪变化生成QQ个性标签建议（因QQ协议未提供标签设置API，仅生成建议文本供参考）"
   },
   
   "_section_life_story": {
@@ -472,6 +515,7 @@
     "description": "更新间隔(天)",
     "type": "int",
     "default": 3,
+    "min": 1,
     "condition": {"enable_life_story": true},
     "hint": "人生故事多久更新一次，单位为天"
   },
@@ -479,6 +523,7 @@
     "description": "收集经历范围(天)",
     "type": "int",
     "default": 7,
+    "min": 1,
     "condition": {"enable_life_story": true},
     "hint": "生成故事时收集最近多少天的经历数据"
   },
@@ -486,6 +531,8 @@
     "description": "精简上下文最大长度",
     "type": "int",
     "default": 200,
+    "min": 100,
+    "max": 500,
     "condition": {"enable_life_story": true},
     "hint": "LLM对话中注入的精简上下文最大字符数，范围100-500"
   },
@@ -501,6 +548,7 @@
     "description": "上下文缓存有效期(天)",
     "type": "int",
     "default": 7,
+    "min": 1,
     "condition": {"enable_life_story": true},
     "hint": "生成的精简上下文缓存多久才需要重新生成"
   },

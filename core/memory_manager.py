@@ -3,12 +3,15 @@
 支持动态权重调整、记忆衰减、优先级排序等功能
 """
 
+import asyncio
 import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from astrbot.api import logger
+
+from .utils import atomic_write_json
 
 
 class MemoryManager:
@@ -27,6 +30,9 @@ class MemoryManager:
         self.memory_reinforcement_file = self.data_dir / "memory_reinforcement.json"
         # 记忆遗忘队列（待淘汰的低价值记忆）
         self.memory_decay_log_file = self.data_dir / "memory_decay.jsonl"
+
+        # File lock for concurrent read-modify-write operations
+        self._file_lock = asyncio.Lock()
 
         self._init_data_files()
 
@@ -162,10 +168,10 @@ class MemoryManager:
             session_id: 会话ID
         """
         try:
-            # 创建对话记录
+            now = datetime.now()
             conversation = {
-                "timestamp": datetime.now().isoformat(),
-                "date": datetime.now().strftime("%Y-%m-%d"),
+                "timestamp": now.isoformat(),
+                "date": now.strftime("%Y-%m-%d"),
                 "user_id": user_id,
                 "session_id": session_id,
                 "user_message": user_message,
@@ -202,7 +208,7 @@ class MemoryManager:
 
     # ========== 记忆强化机制 ==========
 
-    def reinforce_memory(
+    async def reinforce_memory(
         self, memory_id: str, reinforcement_type: str = "manual_recall"
     ) -> None:
         """
@@ -216,13 +222,20 @@ class MemoryManager:
                 - anniversary: 周年纪念
                 - milestone: 里程碑复述
         """
+        async with self._file_lock:
+            self._reinforce_memory_sync(memory_id, reinforcement_type)
+
+    def _reinforce_memory_sync(
+        self, memory_id: str, reinforcement_type: str = "manual_recall"
+    ) -> None:
         try:
+            now = datetime.now()
             with open(self.memory_reinforcement_file, encoding="utf-8") as f:
                 reinforcement_data = json.load(f)
 
             # 记录强化事件
             reinforcement_event = {
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": now.isoformat(),
                 "memory_id": memory_id,
                 "type": reinforcement_type,
                 "effectiveness": self._get_reinforcement_effectiveness(
@@ -231,11 +244,10 @@ class MemoryManager:
             }
 
             reinforcement_data["reinforcement_log"].append(reinforcement_event)
-            reinforcement_data["last_review"] = datetime.now().isoformat()
+            reinforcement_data["last_review"] = now.isoformat()
 
             # 更新文件
-            with open(self.memory_reinforcement_file, "w", encoding="utf-8") as f:
-                json.dump(reinforcement_data, f, ensure_ascii=False, indent=2)
+            atomic_write_json(self.memory_reinforcement_file, reinforcement_data)
 
             logger.debug(f"[记忆管理] 记忆已强化: {memory_id} ({reinforcement_type})")
 
@@ -274,8 +286,7 @@ class MemoryManager:
 
             reinforcement_data["core_memories"].append(core_memory)
 
-            with open(self.memory_reinforcement_file, "w", encoding="utf-8") as f:
-                json.dump(reinforcement_data, f, ensure_ascii=False, indent=2)
+            atomic_write_json(self.memory_reinforcement_file, reinforcement_data)
 
             logger.info("[记忆管理] 核心记忆已保存")
 
@@ -303,7 +314,7 @@ class MemoryManager:
 
     # ========== 记忆遗忘机制 ==========
 
-    def apply_memory_decay(self, days_threshold: int = 30) -> dict[str, Any]:
+    async def apply_memory_decay(self, days_threshold: int = 30) -> dict[str, Any]:
         """
         应用记忆衰减 - 根据时间和重要性自动淡出低价值记忆
 
@@ -313,12 +324,24 @@ class MemoryManager:
         Returns:
             统计信息（淘汰数、保留数等）
         """
+        async with self._file_lock:
+            return self._apply_memory_decay_sync(days_threshold)
+
+    def _apply_memory_decay_sync(self, days_threshold: int = 30) -> dict[str, Any]:
         try:
             if not self.weighted_conversations_file.exists():
                 return {"decayed": 0, "kept": 0, "archived": 0}
 
             with open(self.weighted_conversations_file, encoding="utf-8") as f:
-                conversations = [json.loads(line) for line in f if line.strip()]
+                conversations = []
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        conversations.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
 
             now = datetime.now()
             decayed_count = 0
@@ -346,13 +369,12 @@ class MemoryManager:
                         decay_record = {
                             "timestamp": conv["timestamp"],
                             "user_id": conv["user_id"],
-                            "archived_at": datetime.now().isoformat(),
+                            "archived_at": now.isoformat(),
                             "reason": "low_importance_timeout",
                             "summary": conv["user_message"][:100],
                         }
                         decay_records.append(decay_record)
                         archived_count += 1
-                        decayed_count += 1
                         continue  # 不保存这条记录
                     else:
                         # 衰减但保留
@@ -363,9 +385,7 @@ class MemoryManager:
                 kept_count += 1
 
             # 重写文件（保留未遗忘的记忆）
-            with open(self.weighted_conversations_file, "w", encoding="utf-8") as f:
-                for conv in kept_conversations:
-                    f.write(json.dumps(conv, ensure_ascii=False) + "\n")
+            atomic_write_json(self.weighted_conversations_file, kept_conversations)
 
             # 记录衰减历史
             if decay_records:
@@ -387,7 +407,9 @@ class MemoryManager:
             logger.error(f"[记忆管理] 记忆衰减失败: {e}")
             return {"decayed": 0, "kept": 0, "archived": 0, "error": str(e)}
 
-    def mark_trivial_memory(self, memory_id: str, reason: str = "trivial") -> None:
+    async def mark_trivial_memory(
+        self, memory_id: str, reason: str = "trivial"
+    ) -> None:
         """
         标记琐碎记忆，加速其衰减
 
@@ -395,12 +417,26 @@ class MemoryManager:
             memory_id: 记忆ID（timestamp）
             reason: 标记原因
         """
+        async with self._file_lock:
+            self._mark_trivial_memory_sync(memory_id, reason)
+
+    def _mark_trivial_memory_sync(
+        self, memory_id: str, reason: str = "trivial"
+    ) -> None:
         try:
             if not self.weighted_conversations_file.exists():
                 return
 
             with open(self.weighted_conversations_file, encoding="utf-8") as f:
-                conversations = [json.loads(line) for line in f if line.strip()]
+                conversations = []
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        conversations.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
 
             # 查找并标记
             for conv in conversations:
@@ -413,9 +449,7 @@ class MemoryManager:
                     break
 
             # 重写文件
-            with open(self.weighted_conversations_file, "w", encoding="utf-8") as f:
-                for conv in conversations:
-                    f.write(json.dumps(conv, ensure_ascii=False) + "\n")
+            atomic_write_json(self.weighted_conversations_file, conversations)
 
             logger.debug(f"[记忆管理] 琐碎标记已添加: {memory_id}")
 
@@ -443,7 +477,15 @@ class MemoryManager:
                 return []
 
             with open(self.weighted_conversations_file, encoding="utf-8") as f:
-                conversations = [json.loads(line) for line in f if line.strip()]
+                conversations = []
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        conversations.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
 
             # 过滤和排序
             filtered = [
@@ -477,7 +519,15 @@ class MemoryManager:
                 return {"total": 0, "important": 0, "trivial": 0}
 
             with open(self.weighted_conversations_file, encoding="utf-8") as f:
-                conversations = [json.loads(line) for line in f if line.strip()]
+                conversations = []
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        conversations.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
 
             total = len(conversations)
             important = sum(
