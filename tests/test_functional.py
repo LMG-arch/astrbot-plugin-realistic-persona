@@ -321,18 +321,22 @@ class TestContextEvents:
 class TestConfigSchema:
     """README: 配置项完整性"""
 
+    @staticmethod
+    def _schema_path() -> Path:
+        return Path(__file__).parent.parent / "_conf_schema.json"
+
     def test_forbidden_rules_default_empty(self):
-        with open("_conf_schema.json", encoding="utf-8") as f:
+        with open(self._schema_path(), encoding="utf-8") as f:
             assert json.load(f)["image_forbidden_rules"]["default"] == ""
 
     def test_numeric_bounds(self):
-        with open("_conf_schema.json", encoding="utf-8") as f:
+        with open(self._schema_path(), encoding="utf-8") as f:
             schema = json.load(f)
         for field in ["selfie_trigger_chance", "insomnia_probability", "schedule_hour"]:
             assert "min" in schema[field] and "max" in schema[field]
 
     def test_sensitive_hints(self):
-        with open("_conf_schema.json", encoding="utf-8") as f:
+        with open(self._schema_path(), encoding="utf-8") as f:
             schema = json.load(f)
         for field in ["api_key", "openai_api_key", "aliyun_api_key"]:
             assert schema[field].get("obvious_hint") is True

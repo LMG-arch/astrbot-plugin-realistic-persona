@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -384,8 +385,17 @@ class MemoryManager:
                 kept_conversations.append(conv)
                 kept_count += 1
 
-            # 重写文件（保留未遗忘的记忆）
-            atomic_write_json(self.weighted_conversations_file, kept_conversations)
+            # Rewrite file preserving JSONL format (one JSON object per line)
+            # Using atomic_write_json here would corrupt the format because it
+            # serializes the list as a single JSON array, but the file is
+            # appended to line-by-line in record_weighted_conversation.
+            tmp_path = self.weighted_conversations_file.with_suffix(
+                self.weighted_conversations_file.suffix + ".tmp"
+            )
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                for conv in kept_conversations:
+                    f.write(json.dumps(conv, ensure_ascii=False) + "\n")
+            os.replace(tmp_path, self.weighted_conversations_file)
 
             # 记录衰减历史
             if decay_records:
@@ -448,8 +458,14 @@ class MemoryManager:
                     )
                     break
 
-            # 重写文件
-            atomic_write_json(self.weighted_conversations_file, conversations)
+            # Rewrite file preserving JSONL format
+            tmp_path = self.weighted_conversations_file.with_suffix(
+                self.weighted_conversations_file.suffix + ".tmp"
+            )
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                for conv in conversations:
+                    f.write(json.dumps(conv, ensure_ascii=False) + "\n")
+            os.replace(tmp_path, self.weighted_conversations_file)
 
             logger.debug(f"[记忆管理] 琐碎标记已添加: {memory_id}")
 

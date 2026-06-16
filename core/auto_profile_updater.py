@@ -787,3 +787,108 @@ class AutoProfileUpdater:
                 summary += f"  • {time_str} - {emotion} (强度: {intensity:.2f})\n"
 
         return summary
+
+    async def update_from_thinking(
+        self,
+        bot,
+        emotion: str,
+        intensity: float,
+        llm_action=None,
+        enable_auto_avatar: bool = False,
+        context_data: str = "",
+    ) -> dict[str, bool]:
+        """Apply profile updates triggered by async thinking.
+
+        This is the public entry-point that encapsulates the per-field
+        check-generate-record pipeline, so callers (ProfileManager) don't
+        need to reach into private methods.
+
+        Args:
+            bot: Cached bot object for QQ API calls.
+            emotion: Emotion string (e.g. "开心").
+            intensity: Emotion intensity (0-1).
+            llm_action: LLMAction instance (optional, for avatar/LLM generation).
+            enable_auto_avatar: Whether avatar auto-update is globally enabled.
+            context_data: Context string for LLM prompt enrichment.
+
+        Returns:
+            Dict of {field: bool} indicating which fields were updated.
+        """
+        result = {"nickname": False, "signature": False, "avatar": False, "tag": False}
+
+        if not self._check_frequency_limit():
+            return result
+
+        if self.enable_nickname and self.can_update("nickname"):
+            try:
+                new_nickname = await self.generate_nickname(
+                    emotion,
+                    intensity,
+                    llm_action=llm_action if enable_auto_avatar else None,
+                    context_data=context_data,
+                )
+                if new_nickname != self.state.get("current_nickname"):
+                    await bot.set_qq_profile(nickname=new_nickname)
+                    self.state["current_nickname"] = new_nickname
+                    self._record_update("nickname")
+                    result["nickname"] = True
+                    logger.info(f"[Profile更新] 异步思考更新昵称: {new_nickname}")
+            except Exception as e:
+                logger.debug(f"[Profile更新] 异步思考更新昵称失败: {e}")
+
+        if self.enable_signature and self.can_update("signature"):
+            try:
+                new_signature = await self.generate_signature(
+                    emotion,
+                    intensity,
+                    context=context_data,
+                    llm_action=llm_action if enable_auto_avatar else None,
+                )
+                if new_signature != self.state.get("current_signature"):
+                    await bot.set_self_longnick(longNick=new_signature)
+                    self.state["current_signature"] = new_signature
+                    self._record_update("signature")
+                    result["signature"] = True
+                    logger.info(f"[Profile更新] 异步思考更新签名: {new_signature}")
+            except Exception as e:
+                logger.debug(f"[Profile更新] 异步思考更新签名失败: {e}")
+
+        if (
+            enable_auto_avatar
+            and self.enable_avatar
+            and self.can_update("avatar")
+            and self._check_avatar_daily_limit()
+            and llm_action
+        ):
+            try:
+                avatar_prompt = self.generate_avatar(emotion, intensity)
+                logger.info(f"[Profile更新] 异步思考生成头像，提示词: {avatar_prompt}")
+                image_url = await llm_action._request_image_with_fallback(
+                    avatar_prompt, "1024x1024"
+                )
+                if image_url:
+                    await bot.set_qq_avatar(file=image_url)
+                    self.state["last_avatar_url"] = image_url
+                    self._record_update("avatar")
+                    result["avatar"] = True
+                    logger.info("[Profile更新] 异步思考更新头像成功")
+            except Exception as e:
+                logger.debug(f"[Profile更新] 异步思考更新头像失败: {e}")
+
+        if self.enable_tag and self.can_update("tag"):
+            try:
+                tag_suggestion = await self.generate_tag(
+                    emotion,
+                    intensity,
+                    llm_action=llm_action if enable_auto_avatar else None,
+                )
+                if tag_suggestion:
+                    self.state["current_tag_suggestion"] = tag_suggestion
+                    self._record_update("tag")
+                    result["tag"] = True
+                    logger.info(f"[Profile更新] 异步思考标签建议: {tag_suggestion}")
+            except Exception as e:
+                logger.debug(f"[Profile更新] 异步思考生成标签失败: {e}")
+
+        self._save_state()
+        return result

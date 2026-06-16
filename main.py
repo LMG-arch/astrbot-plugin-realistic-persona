@@ -44,7 +44,6 @@ except ImportError as e:
     logger.warning(f"QQ空间模块未完全加载: {e}")
 
 from .core.monkey_patches import apply_toolset_patch
-from .core.utils import stable_hash
 from .managers import (
     EmotionManager,
     ExperienceManager,
@@ -53,6 +52,7 @@ from .managers import (
     ProactiveManagerWrapper,
     ProfileManager,
     SharedState,
+    SystemPromptInjector,
     ThinkingManager,
 )
 
@@ -84,6 +84,7 @@ class Main(Star):
         self.profile_manager = ProfileManager(self.state)
         self.thinking_manager = ThinkingManager(self.state)
         self.experience_manager = ExperienceManager(self.state)
+        self.prompt_injector = SystemPromptInjector(self.state, self)
 
         self._register_event_handlers()
 
@@ -290,10 +291,6 @@ class Main(Star):
                     except Exception as e:
                         logger.error(f"无法加载pillowmd样式：{e}")
 
-                task = asyncio.create_task(initialize_qzone(self.state, self.context))
-                await self.state.add_background_task_safe(task)
-                task.add_done_callback(self.state._background_tasks.discard)
-
             self._print_plugin_status()
             logger.info("拟人化角色行为系统插件加载完毕！")
         except Exception as e:
@@ -345,13 +342,13 @@ class Main(Star):
         try:
             logger.info("拟人化角色行为系统插件正在卸载...")
 
-            for task in self.state._background_tasks:
-                task.cancel()
-            if self.state._background_tasks:
-                await asyncio.gather(
-                    *self.state._background_tasks, return_exceptions=True
-                )
-            self.state._background_tasks.clear()
+            await self.state.cancel_all_background_tasks_safe()
+
+            if self.state.personality_evolution:
+                try:
+                    self.state.personality_evolution.self_awareness.flush_dirty()
+                except Exception:
+                    pass
 
             if self.state.enable_async_thinking and self.state.async_thinking_scheduler:
                 try:
@@ -450,259 +447,13 @@ class Main(Star):
     async def on_llm_request_handler(
         self, event: AstrMessageEvent, request: ProviderRequest
     ):
-        self.state._current_events[event.get_session_id()] = event
+        await self.state.set_current_event_safe(event.get_session_id(), event)
         return await self._on_llm_request_handler(event, request)
 
     async def _on_llm_request_handler(
         self, event: AstrMessageEvent, request: ProviderRequest
     ):
-        analysis: dict | None = None
-
-        try:
-            now = datetime.now()
-            time_str = now.strftime("%Y年%m月%d日 %H:%M:%S")
-            time_info = f"[当前时间：{time_str}]"
-
-            if hasattr(request, "system_prompt"):
-                if request.system_prompt:
-                    request.system_prompt = time_info + "\n" + request.system_prompt
-                else:
-                    request.system_prompt = time_info
-            logger.debug(f"[时间信息] 已注入时间: {time_str}")
-        except Exception as e:
-            logger.debug(f"[时间信息] 注入失败: {e}")
-
-        try:
-            if hasattr(request, "messages") and request.messages:
-                now = datetime.now()
-                current_timestamp = now.timestamp()
-
-                for msg in request.messages:
-                    if isinstance(msg, dict) and "content" in msg:
-                        if "time_info" not in msg:
-                            msg_timestamp = msg.get("timestamp", current_timestamp)
-                            time_diff_seconds = max(
-                                0, int(current_timestamp - msg_timestamp)
-                            )
-
-                            if time_diff_seconds < 60:
-                                time_diff_str = f"{time_diff_seconds}秒前"
-                            elif time_diff_seconds < 3600:
-                                time_diff_str = f"{time_diff_seconds // 60}分钟前"
-                            elif time_diff_seconds < 86400:
-                                time_diff_str = f"{time_diff_seconds // 3600}小时前"
-                            else:
-                                time_diff_str = f"{time_diff_seconds // 86400}天前"
-
-                            if msg["role"] == "user" and not msg["content"].startswith(
-                                "[用户说话时间:"
-                            ):
-                                msg["content"] = (
-                                    f"[用户说话时间: {time_diff_str}]\n{msg['content']}"
-                                )
-                            elif msg["role"] == "assistant" and not msg[
-                                "content"
-                            ].startswith("[我的回复时间:"):
-                                msg["content"] = (
-                                    f"[我的回复时间: {time_diff_str}]\n{msg['content']}"
-                                )
-
-                logger.debug(
-                    f"[历史消息] 已为 {len(request.messages)} 条消息注入时间戳"
-                )
-        except Exception as e:
-            logger.debug(f"[历史消息时间戳] 处理失败: {e}")
-
-        if self.state.enable_async_thinking and self.state.life_story_engine:
-            try:
-                current_persona = await self.life_manager.get_system_persona_profile()
-                if current_persona:
-                    self.state.life_story_engine.set_base_persona(current_persona)
-
-                if self.state.life_story_engine.should_update():
-                    task = asyncio.create_task(
-                        self.thinking_manager.update_life_story_async()
-                    )
-                    await self.state.add_background_task_safe(task)
-                    task.add_done_callback(self.state._background_tasks.discard)
-                    logger.info("[人生故事] 后台更新经历线已触发")
-
-                story_context = self.state.life_story_engine.get_context_for_llm()
-                if story_context:
-                    context_hint = f"\n[背景上下文]\n{story_context}"
-                    if hasattr(request, "system_prompt"):
-                        if request.system_prompt:
-                            request.system_prompt += context_hint
-                        else:
-                            request.system_prompt = context_hint
-                    logger.debug(
-                        f"[人生故事] 已注入上下文，长度: {len(story_context)}字符"
-                    )
-
-            except Exception as e:
-                logger.error(f"人生故事引擎处理失败: {e}")
-
-        if self.state.enable_async_thinking and self.state.memory_manager:
-            try:
-                memory_text = await self.thinking_manager.recall_memory_for_context(
-                    event
-                )
-                if memory_text:
-                    memory_hint = f"\n[相关记忆]\n{memory_text}"
-                    if hasattr(request, "system_prompt"):
-                        if request.system_prompt:
-                            request.system_prompt += memory_hint
-                        else:
-                            request.system_prompt = memory_hint
-                    logger.debug(f"[记忆召回] 已注入记忆，长度: {len(memory_text)}字符")
-            except Exception as e:
-                logger.debug(f"[记忆召回] 注入失败: {e}")
-
-        if self.state.enable_emotion_detection:
-            try:
-                logger.debug("[情绪检测] 开始分析用户消息...")
-                analysis = await self.emotion_manager.process_emotion_and_events(event)
-                if analysis and analysis.get("emotion"):
-                    emotion = analysis["emotion"]
-                    session_id = event.get_session_id()
-                    emotion_context = self.emotion_manager.get_context(session_id)
-
-                    logger.info(f"[情绪检测] 检测到用户情绪: {emotion.value}")
-
-                    emotion_info = f"\n[当前检测到用户情绪: {emotion.value}]"
-
-                    trend = emotion_context.get_emotion_trend()
-                    if trend:
-                        emotion_info += f"\n[情绪趋势: {trend}]"
-
-                    if analysis.get("should_selfie"):
-                        emotion_info += "\n[建议: 可以考虑使用 draw 工具生成一张真人自拍图片，表现当前情绪状态，保持真实感]"
-
-                    if hasattr(request, "system_prompt"):
-                        if request.system_prompt:
-                            request.system_prompt += emotion_info
-                        else:
-                            request.system_prompt = emotion_info
-
-                    self.state.context_state.update_state(
-                        session_id, "last_emotion", emotion.value
-                    )
-                    self.state.context_state.update_state(
-                        session_id, "emotion_analysis", analysis
-                    )
-            except Exception as e:
-                logger.error(f"情绪分析失败: {e}")
-
-        if self.state.enable_life_simulation:
-            try:
-                user_message = (
-                    event.message_obj.message_str
-                    if hasattr(event, "message_obj")
-                    else ""
-                )
-
-                simple_greetings = [
-                    "你是谁",
-                    "你好",
-                    "hi",
-                    "hello",
-                    "在吗",
-                    "在不在",
-                    "是你吗",
-                ]
-                is_simple_question = any(
-                    greeting in user_message.lower() for greeting in simple_greetings
-                )
-
-                if not is_simple_question and len(user_message) > 5:
-                    logger.debug("[生活模拟] 开始构建生活上下文信息...")
-                    life_info = await self.life_manager.build_life_context(
-                        event, analysis
-                    )
-                    if life_info:
-                        logger.info(f"[生活模拟] 已注入背景信息：{life_info[:50]}...")
-                        life_context = (
-                            f"\n\n[背景信息 - 仅供参考，不影响主要回答]\n{life_info}"
-                        )
-                        if hasattr(request, "system_prompt"):
-                            if request.system_prompt:
-                                request.system_prompt += life_context
-                            else:
-                                request.system_prompt = life_context
-            except Exception as e:
-                logger.error(f"生活模拟上下文构建失败: {e}")
-
-        if (
-            self.state.enable_async_thinking
-            and self.state.personality_evolution
-            and stable_hash(event.get_session_id()) % 10 == 0
-        ):
-            try:
-                summary = self.state.personality_evolution.get_personality_summary()
-                if summary:
-                    phase = summary.get("current_phase", "stable")
-                    phase_name = "稳定期" if phase == "stable" else "变化期"
-                    expr = summary.get("expression_levels", {})
-                    vocab = expr.get("vocabulary", 5)
-                    humor = expr.get("humor", 5)
-                    complexity = expr.get("complexity", 5)
-                    habits = summary.get("core_habits", [])
-                    personality_hint = (
-                        f"\n[表达风格提示 - {phase_name}] "
-                        f"词汇水平{vocab}/10，幽默感{humor}/10，句式复杂度{complexity}/10"
-                    )
-                    if habits:
-                        personality_hint += f"。核心习惯：{', '.join(habits[:3])}"
-                    if hasattr(request, "system_prompt"):
-                        if request.system_prompt:
-                            request.system_prompt += personality_hint
-                        else:
-                            request.system_prompt = personality_hint
-            except Exception as e:
-                logger.debug(f"注入人格演化上下文失败: {e}")
-
-        if (
-            self.state.enable_async_thinking
-            and self.state.experience_bank
-            and self.state.async_thinking_scheduler
-        ):
-            try:
-                user_message = event.message_obj.message_str or ""
-                session_id = event.get_session_id()
-                unified_msg_origin = event.unified_msg_origin
-
-                await self.experience_manager.record_interaction_async(
-                    session_id, user_message, unified_msg_origin
-                )
-
-                if self.state.personality_evolution:
-                    self.state.personality_evolution.daily_routine()
-
-                # Inject relationship profile for differentiated interactions
-                try:
-                    rel_profile = self.state.experience_bank.get_relationship_profile(
-                        session_id
-                    )
-                    if rel_profile and rel_profile.get("interaction_count", 0) > 5:
-                        rel_hint = (
-                            f"\n[与该用户的关系] "
-                            f"互动{rel_profile['interaction_count']}次"
-                        )
-                        chars = rel_profile.get("relationship_characteristics", "")
-                        if chars:
-                            rel_hint += f"，特点：{chars}"
-                        if hasattr(request, "system_prompt"):
-                            if request.system_prompt:
-                                request.system_prompt += rel_hint
-                            else:
-                                request.system_prompt = rel_hint
-                except Exception:
-                    pass
-
-            except Exception as e:
-                logger.error(f"记录用户交互失败: {e}")
-
-        return None
+        return await self.prompt_injector.inject_all(event, request)
 
     async def _check_and_share_life(self):
         await self.proactive_mgr.check_and_share_life(life_manager=self.life_manager)
@@ -721,10 +472,10 @@ class Main(Star):
         logger.info(f"[绘图工具] 被调用 - prompt: {prompt[:50]}..., size: {size}")
 
         if not self.state.llm_tool_enabled:
-            return "绘图工具已被禁用"
+            return f"{ImageManager.DRAW_FAIL_PREFIX}绘图工具已被禁用"
 
         if not self.state.api_key:
-            return "API密钥未配置，无法生成图片"
+            return f"{ImageManager.DRAW_FAIL_PREFIX}API密钥未配置，无法生成图片"
 
         try:
             session_id = event.get_session_id()
@@ -773,7 +524,7 @@ class Main(Star):
             error_msg = f"生成图片时遇到问题: {str(e)}"
             logger.error(f"[绘图工具] 失败: {error_msg}")
             await event.send(event.plain_result(error_msg))
-            return f"图片生成失败：{str(e)}"
+            return f"{ImageManager.DRAW_FAIL_PREFIX}图片生成失败：{str(e)}"
 
     @filter.command("aiimg")
     async def generate_image_command(self, event: AstrMessageEvent):

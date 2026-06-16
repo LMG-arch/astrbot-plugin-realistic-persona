@@ -289,6 +289,8 @@ class SharedState:
                 activity_interval_minutes=self.activity_interval_minutes,
                 on_thought_generated=None,
                 context_provider=None,
+                timezone=self._resolve_timezone(),
+                local_data_manager=self.local_data_manager,
             )
             logger.info(
                 f"异步思考调度器已初始化（思考间隔: {self.think_interval_minutes}分钟, "
@@ -337,6 +339,25 @@ class SharedState:
         async with self._tasks_lock:
             self._background_tasks.discard(task)
 
+    async def cancel_all_background_tasks_safe(self):
+        """Cancel all background tasks, wait for them, and clear the set.
+
+        Lock-protected to avoid iteration-during-modification errors.
+        """
+        import asyncio as _asyncio
+
+        async with self._tasks_lock:
+            tasks = list(self._background_tasks)
+
+        for task in tasks:
+            task.cancel()
+
+        if tasks:
+            await _asyncio.gather(*tasks, return_exceptions=True)
+
+        async with self._tasks_lock:
+            self._background_tasks.clear()
+
     async def update_life_state_safe(self, session_id: str, data: dict):
         """Update life state for a session (lock-protected write)."""
         async with self._life_state_lock:
@@ -346,6 +367,14 @@ class SharedState:
         """Get life state for a session (lock-protected read)."""
         async with self._life_state_lock:
             return self.life_state.get(session_id)
+
+    def _resolve_timezone(self) -> str:
+        """Resolve timezone from AstrBot config, falling back to Asia/Shanghai."""
+        try:
+            tz = self.context.get_config().get("timezone")
+            return tz if tz else "Asia/Shanghai"
+        except Exception:
+            return "Asia/Shanghai"
 
     def get_provider_id(self) -> str | None:
         """Get the current LLM provider ID."""

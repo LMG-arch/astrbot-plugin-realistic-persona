@@ -91,7 +91,12 @@ class SelfAwarenessSystem:
             logger.error(f"[自我认知] 保存状态失败: {e}")
 
     def record_behavior(self, behavior_type: str, details: str):
-        """记录行为，用于一致性检查"""
+        """记录行为，用于一致性检查
+
+        Updates in-memory stats only; the actual disk flush is deferred
+        to ``daily_routine`` via ``flush_dirty()`` to avoid a full JSON
+        write on every single interaction.
+        """
         self.behavior_stats["total_interactions"] += 1
 
         # 识别表现出的特质
@@ -99,7 +104,15 @@ class SelfAwarenessSystem:
             if trait in details:
                 self.behavior_stats["trait_manifestations"][trait] += 1
 
-        self._save_state()
+        self._dirty = True
+
+    _dirty: bool = False
+
+    def flush_dirty(self):
+        """Persist pending in-memory changes to disk (if any)."""
+        if self._dirty:
+            self._save_state()
+            self._dirty = False
 
     def check_consistency(self) -> dict[str, Any]:
         """检查自我描述与行为一致性"""
@@ -467,6 +480,9 @@ class PersonalityEvolutionManager:
     def daily_routine(self):
         """Daily routine check: habit balance, self-consistency, trait pruning."""
         logger.info("[人格演化] 执行每日例行检查")
+
+        # Flush any pending in-memory behavior stats to disk
+        self.self_awareness.flush_dirty()
 
         # Habit balance check
         self.habit_balance.daily_check()

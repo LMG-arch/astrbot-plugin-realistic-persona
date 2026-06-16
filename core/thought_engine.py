@@ -86,6 +86,11 @@ class ThoughtEngine:
         # 个人状态文件
         self.status_file = self.data_dir / "status.json"
 
+        # JSONL rotation config
+        self._max_jsonl_lines: int = 5000
+        self._rotation_check_counter: int = 0
+        self._rotation_check_interval: int = 100
+
         self._init_data_files()
 
     def _init_data_files(self):
@@ -473,6 +478,7 @@ class ThoughtEngine:
             with open(self.thoughts_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
+            self._maybe_rotate_jsonl(self.thoughts_file)
             logger.debug("[思考引擎] 思考已保存到本地")
 
         except Exception as e:
@@ -492,10 +498,23 @@ class ThoughtEngine:
             with open(self.activities_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
+            self._maybe_rotate_jsonl(self.activities_file)
             logger.debug("[思考引擎] 活动已保存到本地")
 
         except Exception as e:
             logger.error(f"[思考引擎] 保存活动失败: {e}")
+
+    def _maybe_rotate_jsonl(self, file_path: Path) -> None:
+        """Check JSONL rotation every N records to bound file growth."""
+        self._rotation_check_counter += 1
+        if self._rotation_check_counter % self._rotation_check_interval != 0:
+            return
+        try:
+            from .utils import rotate_jsonl_if_needed
+
+            rotate_jsonl_if_needed(file_path, self._max_jsonl_lines)
+        except Exception as e:
+            logger.debug(f"[思考引擎] JSONL轮转检查失败: {e}")
 
     def get_today_thoughts(self) -> list[dict[str, Any]]:
         """获取今天的所有思考"""

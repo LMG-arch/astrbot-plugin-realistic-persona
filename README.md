@@ -375,9 +375,13 @@ pip install -r requirements.txt
 - 完善的错误处理
 - 支持热重载
 - Manager 架构（SharedState + BaseManager 模式）
+- SystemPromptInjector 分层注入（9 段 prompt 注入解耦）
 - 原子文件写入（write-to-temp + rename，防止崩溃丢数据）
 - 异步锁保护并发文件访问
-- 57 项自动化测试覆盖
+- 线程锁保护同步写入路径
+- JSONL 文件自动 rotation（防无限增长）
+- dirty-flag 延迟批量写入（减少 I/O）
+- 127 项自动化测试覆盖
 
 ## 优化说明
 
@@ -773,6 +777,27 @@ pip install -r requirements.txt
 
 - v1.22.0: 沉睡数据唤醒、记忆召回、孤独感系统增强
 
+- v1.23.0: 全面修复——数据安全、并发竞态、逻辑匹配、架构重构
+  - **数据安全**：
+    - 修复 `memory_manager` decay 操作损坏 JSONL 格式（`atomic_write_json` 写出 JSON 数组 → 改为逐行 JSONL 重写，与 append 语义兼容）
+    - `AsyncThinkingScheduler` 时区参数化（移除硬编码 `Asia/Shanghai`，从用户配置读取）
+  - **并发与竞态**：
+    - 新增通用 JSONL rotation 函数 `rotate_jsonl_if_needed`，`thoughts.jsonl`/`activities.jsonl` 无限增长问题修复
+    - `_current_events` 字典访问走 `set_current_event_safe` 锁保护
+    - `terminate` 中 `_background_tasks` 清理走锁保护（`cancel_all_background_tasks_safe`）
+    - QZone 初始化去重——移除 `initialize` 中的冗余 `initialize_qzone` 调用
+    - `LocalDataManager.clear_expired_data` 现由每日凌晨3点 cron 任务定期调用（此前从未被调用）
+    - `experience_bank` 6 个 record 方法添加 `threading.Lock` 保护并发写入
+  - **逻辑与匹配**：
+    - 情绪关键词精确化：`"牛"` → `"牛!"` `":牛"` `":牛x"`；`"棒"` → `"棒!"`，消除 `"牛奶"`/`"木棒"` 等误匹配
+    - 绘图结果判断改用 `__DRAW_FAIL__` 前缀标记 + `is_draw_success()` 静态方法，替代脆弱的 `"失败" in result` 字符串包含判断
+    - `psychology_engine.update_emotion_phase` 精确匹配优先（`"happy"` 不再误匹配 `"unhappy"`）
+  - **架构重构**：
+    - `_on_llm_request_handler` 9 段注入逻辑拆分为 `SystemPromptInjector`（`managers/prompt_injector.py`），main.py 精简约 200 行
+    - `ExperienceManager.record_interaction_async` 非关键路径（情绪分析、用户记录、心理引擎、人格演化）拆分为 `asyncio.create_task` 后台执行
+    - `AutoProfileUpdater` 新增 `update_from_thinking()` 公共方法，`ProfileManager` 不再直接访问私有方法
+    - `SelfAwarenessSystem.record_behavior` 引入 `_dirty` 标志延迟写入，`daily_routine` 末尾统一 `flush_dirty()`
+  - **测试**：127 passed, 5 skipped, 0 failed；ruff format + check 零错误
 
 ## 致谢
 

@@ -5,6 +5,8 @@
 
 import asyncio
 import json
+import os
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -52,8 +54,10 @@ class ExperienceBank:
         # 人格分化文件
         self.personality_file = self.data_dir / "personalities.jsonl"
 
-        # File lock for concurrent read-modify-write operations
+        # File lock for concurrent read-modify-write operations (async)
         self._file_lock = asyncio.Lock()
+        # Thread lock for synchronous append/write operations
+        self._write_lock = threading.Lock()
 
         # JSONL rotation: max lines before truncation (0 = unlimited)
         self._max_conversation_lines: int = 5000
@@ -128,17 +132,18 @@ class ExperienceBank:
                 "response_length": len(bot_response),
             }
 
-            with open(self.conversations_file, "a", encoding="utf-8") as f:
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            with self._write_lock:
+                with open(self.conversations_file, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-            # 更新关系网络
-            self._update_relationship_sync(
-                user_id,
-                {
-                    "last_chat": now.isoformat(),
-                    "interaction_type": "conversation",
-                },
-            )
+                # 更新关系网络
+                self._update_relationship_sync(
+                    user_id,
+                    {
+                        "last_chat": now.isoformat(),
+                        "interaction_type": "conversation",
+                    },
+                )
 
             logger.info(f"[经历银行] 对话已记录: 用户 {user_id}")
 
@@ -177,8 +182,9 @@ class ExperienceBank:
                 "metadata": metadata or {},
             }
 
-            with open(self.events_file, "a", encoding="utf-8") as f:
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            with self._write_lock:
+                with open(self.events_file, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
             logger.info(f"[经历银行] 事件已记录: {event_type}")
 
@@ -864,8 +870,9 @@ class ExperienceBank:
                 "metadata": metadata or {},
             }
 
-            with open(self.projects_file, "a", encoding="utf-8") as f:
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            with self._write_lock:
+                with open(self.projects_file, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
             logger.info(f"[经历银行] 项目已记录: {project_name} - {status}")
 
@@ -903,8 +910,9 @@ class ExperienceBank:
                 "metadata": metadata or {},
             }
 
-            with open(self.promises_file, "a", encoding="utf-8") as f:
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            with self._write_lock:
+                with open(self.promises_file, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
             logger.info(f"[经历银行] 承诺已记录: {promise}")
 
@@ -952,7 +960,24 @@ class ExperienceBank:
                     updated = True
 
             if updated:
-                atomic_write_json(self.promises_file, promises)
+                # Write back as JSONL (one JSON object per line), not as JSON array
+                import tempfile as _tf
+
+                fd, tmp_path = _tf.mkstemp(
+                    dir=self.promises_file.parent, suffix=".tmp", prefix=".tmp_"
+                )
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        for promise in promises:
+                            f.write(json.dumps(promise, ensure_ascii=False) + "\n")
+                            f.flush()
+                    os.replace(tmp_path, self.promises_file)
+                except Exception:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+                    raise
                 logger.info(f"[经历银行] 承诺已完成: {promise_keyword}")
 
         except Exception as e:
@@ -983,8 +1008,9 @@ class ExperienceBank:
                 "mood": mood,
             }
 
-            with open(self.circadian_file, "a", encoding="utf-8") as f:
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            with self._write_lock:
+                with open(self.circadian_file, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
         except Exception as e:
             logger.debug(f"[经历银行] 记录生物钟失败: {e}")
@@ -1017,8 +1043,9 @@ class ExperienceBank:
                 "metadata": metadata or {},
             }
 
-            with open(self.personality_file, "a", encoding="utf-8") as f:
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+            with self._write_lock:
+                with open(self.personality_file, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
             logger.info(f"[经历银行] 人格表现已记录: {context_type}")
 
@@ -1355,9 +1382,7 @@ class ExperienceBank:
         """Check if a JSONL file needs rotation and rotate if so.
 
         Rotation is only checked every ``_rotation_check_interval`` records
-        to avoid stat-ing the file on every single append.  When the line
-        count exceeds *max_lines*, the file is truncated to keep only the
-        most recent half of the allowed lines.
+        to avoid stat-ing the file on every single append.
 
         Args:
             file_path: Path to the JSONL file.
@@ -1371,41 +1396,8 @@ class ExperienceBank:
             return
 
         try:
-            if not file_path.exists():
-                return
+            from .utils import rotate_jsonl_if_needed
 
-            line_count = 0
-            with open(file_path, encoding="utf-8") as f:
-                for _ in f:
-                    line_count += 1
-
-            if line_count <= max_lines:
-                return
-
-            # Read all valid lines, keep the most recent half
-            keep_count = max_lines // 2
-            lines: list[str] = []
-            with open(file_path, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        json.loads(line)  # validate
-                        lines.append(line)
-                    except json.JSONDecodeError:
-                        continue
-
-            kept = lines[-keep_count:]
-            with open(file_path, "w", encoding="utf-8") as f:
-                for line in kept:
-                    f.write(line + "\n")
-
-            removed = line_count - len(kept)
-            logger.info(
-                f"[经历银行] JSONL轮转: {file_path.name} "
-                f"{line_count} -> {len(kept)} 行 (移除 {removed} 条旧记录)"
-            )
-
+            rotate_jsonl_if_needed(file_path, max_lines, force=True)
         except Exception as e:
             logger.debug(f"[经历银行] JSONL轮转检查失败: {e}")

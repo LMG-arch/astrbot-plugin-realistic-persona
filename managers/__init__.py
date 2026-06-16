@@ -5,6 +5,7 @@ from .image_manager import ImageManager
 from .life_manager import LifeManager
 from .proactive_manager import ProactiveManager as ProactiveManagerWrapper
 from .profile_manager import ProfileManager
+from .prompt_injector import SystemPromptInjector
 from .thinking_manager import ThinkingManager
 
 __all__ = [
@@ -17,4 +18,5 @@ __all__ = [
     "ProfileManager",
     "ThinkingManager",
     "ExperienceManager",
+    "SystemPromptInjector",
 ]

@@ -146,3 +146,75 @@ async def normalize_images(images: Sequence[BytesOrStr] | None) -> list[bytes]:
         else:
             raise TypeError(f"image 必须是 str 或 bytes，收到 {type(item)}")
     return cleaned
+
+
+def rotate_jsonl_if_needed(
+    file_path: Path | str,
+    max_lines: int,
+    force: bool = False,
+) -> bool:
+    """Rotate a JSONL file by keeping only the most recent half when it exceeds max_lines.
+
+    Args:
+        file_path: Path to the JSONL file.
+        max_lines: Maximum number of lines before rotation triggers. Use 0 to disable.
+        force: If True, always perform rotation check regardless of heuristic.
+
+    Returns:
+        True if rotation was performed, False otherwise.
+    """
+    if max_lines <= 0:
+        return False
+
+    file_path = Path(file_path)
+    if not file_path.exists():
+        return False
+
+    # Count lines first (cheap)
+    line_count = 0
+    with open(file_path, encoding="utf-8") as f:
+        for _ in f:
+            line_count += 1
+
+    if line_count <= max_lines:
+        return False
+
+    # Read all valid lines, keep the most recent half
+    keep_count = max_lines // 2
+    lines: list[str] = []
+    with open(file_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                json.loads(line)  # validate
+                lines.append(line)
+            except json.JSONDecodeError:
+                continue
+
+    kept = lines[-keep_count:] if keep_count > 0 else []
+
+    # Write back atomically via temp file + os.replace
+    import os
+    import tempfile
+
+    fd, tmp_path = tempfile.mkstemp(dir=file_path.parent, suffix=".tmp", prefix=".tmp_")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for line in kept:
+                f.write(line + "\n")
+        os.replace(tmp_path, file_path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+    removed = line_count - len(kept)
+    logger.info(
+        f"[JSONL Rotation] {file_path.name} {line_count} -> {len(kept)} lines "
+        f"(removed {removed} old records)"
+    )
+    return True

@@ -1,3 +1,4 @@
+import asyncio
 import random
 from datetime import datetime
 
@@ -13,16 +14,27 @@ class ExperienceManager(BaseManager):
     async def record_interaction_async(
         self, session_id: str, user_message: str, unified_msg_origin: str = ""
     ) -> None:
-        """Record user interaction to experience bank."""
+        """Record user interaction to experience bank.
+
+        Critical path (conversation + proactive scheduling) runs synchronously;
+        non-critical I/O (growth, projects, promises, circadian, psychology,
+        memory decay, timeline, personality) is dispatched as a background task
+        to avoid blocking the first response.
+        """
         if not self.state.experience_bank:
             return
 
         try:
+            # ---- Critical path: must complete before response ----
+            # Use unified_msg_origin for the session_id field so that
+            # subsequent lookups (e.g. proactive_manager) which filter by
+            # unified_msg_origin can match records correctly.
+            write_session_id = unified_msg_origin or session_id
             self.state.experience_bank.record_conversation(
                 user_id=session_id,
                 user_message=user_message,
                 bot_response="",
-                session_id=session_id,
+                session_id=write_session_id,
             )
 
             if self.state.enable_proactive_messages:
@@ -41,37 +53,52 @@ class ExperienceManager(BaseManager):
                 target_sessions = self.config.get("proactive_target_sessions", "")
                 if not target_sessions:
                     logger.debug("[主动消息] 未配置目标会话白名单，跳过调度")
-                    return
+                else:
+                    allowed = [
+                        s.strip() for s in target_sessions.split(",") if s.strip()
+                    ]
+                    if not allowed or (
+                        unified_msg_origin and unified_msg_origin not in allowed
+                    ):
+                        logger.debug(
+                            f"[主动消息] 会话 {unified_msg_origin} 不在白名单中，跳过调度"
+                        )
+                    else:
+                        send_session_id = (
+                            unified_msg_origin if unified_msg_origin else session_id
+                        )
 
-                allowed = [s.strip() for s in target_sessions.split(",") if s.strip()]
-                if not allowed or (
-                    unified_msg_origin and unified_msg_origin not in allowed
-                ):
-                    logger.debug(
-                        f"[主动消息] 会话 {unified_msg_origin} 不在白名单中，跳过调度"
-                    )
-                    return
+                        self.state.proactive_manager.schedule_message(
+                            message="",
+                            delay=self.state.idle_greeting_delay,
+                            session_id=send_session_id,
+                            context_data={
+                                "triggered_by": "idle_detection",
+                                "user_id": session_id,
+                                "platform": unified_msg_origin.split(":")[0]
+                                if ":" in unified_msg_origin
+                                else "unknown",
+                            },
+                        )
+                        logger.debug(
+                            f"[主动消息] 已调度空闲问候，{self.state.idle_greeting_delay}秒后发送"
+                        )
 
-                send_session_id = (
-                    unified_msg_origin if unified_msg_origin else session_id
-                )
+            # ---- Non-critical path: dispatch to background ----
+            task = asyncio.create_task(
+                self._background_record_interaction(session_id, user_message)
+            )
+            await self.state.add_background_task_safe(task)
+            task.add_done_callback(self.state._background_tasks.discard)
 
-                self.state.proactive_manager.schedule_message(
-                    message="",
-                    delay=self.state.idle_greeting_delay,
-                    session_id=send_session_id,
-                    context_data={
-                        "triggered_by": "idle_detection",
-                        "user_id": session_id,
-                        "platform": unified_msg_origin.split(":")[0]
-                        if ":" in unified_msg_origin
-                        else "unknown",
-                    },
-                )
-                logger.debug(
-                    f"[主动消息] 已调度空闲问候，{self.state.idle_greeting_delay}秒后发送"
-                )
+        except Exception as e:
+            logger.debug(f"记录用户交互失败: {e}")
 
+    async def _background_record_interaction(
+        self, session_id: str, user_message: str
+    ) -> None:
+        """Non-critical I/O operations that can run in the background."""
+        try:
             self.extract_and_update_growth(user_message)
             self.detect_and_record_projects(user_message, session_id)
             self.detect_and_record_promises(user_message, session_id)
@@ -127,10 +154,10 @@ class ExperienceManager(BaseManager):
                 except Exception as e:
                     logger.debug(f"[人格演化] process_interaction 失败: {e}")
 
-            logger.debug(f"用户交互已记录: {session_id}")
+            logger.debug(f"用户交互后台处理完成: {session_id}")
 
         except Exception as e:
-            logger.debug(f"记录用户交互失败: {e}")
+            logger.debug(f"后台记录用户交互失败: {e}")
 
     def extract_and_update_growth(self, message: str) -> None:
         """Extract interests, skills etc from user message and update growth tracking."""

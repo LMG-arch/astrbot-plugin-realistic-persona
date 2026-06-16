@@ -15,6 +15,17 @@ from .base import BaseManager
 class ImageManager(BaseManager):
     """Manages AI image generation: ModelScope, OpenAI DALL-E, Aliyun, prompt enhancement."""
 
+    # Prefix marker for draw failures — callers check this instead of
+    # fragile keyword substring matching like "失败" / "错误".
+    DRAW_FAIL_PREFIX = "__DRAW_FAIL__"
+
+    @classmethod
+    def is_draw_success(cls, result: str | None) -> bool:
+        """Check if a draw_func result indicates success."""
+        if not result:
+            return False
+        return not result.startswith(cls.DRAW_FAIL_PREFIX)
+
     async def request_modelscope(
         self, prompt: str, size: str, session: aiohttp.ClientSession
     ) -> str:
@@ -592,15 +603,7 @@ class ImageManager(BaseManager):
                             )
                             try:
                                 result = await draw_func(event, prompt, size)
-                                # NOTE: Keyword-based success check is fragile --
-                                # a result containing "失败"/"错误" as part of a
-                                # legitimate message (e.g. "没有失败的经历") would
-                                # be incorrectly treated as a failure.
-                                if (
-                                    result
-                                    and "失败" not in result
-                                    and "错误" not in result
-                                ):
+                                if self.is_draw_success(result):
                                     logger.info("[图像生成检测] 自动调用绘图工具成功")
                                     return True
                                 else:
@@ -642,7 +645,7 @@ class ImageManager(BaseManager):
                         )
                         try:
                             result = await draw_func(event, prompt, "1024x1024")
-                            if result and "失败" not in result and "错误" not in result:
+                            if self.is_draw_success(result):
                                 logger.info("[图像生成检测] 自动调用绘图工具成功")
                                 return True
                             else:
@@ -698,11 +701,7 @@ class ImageManager(BaseManager):
                             )
                             try:
                                 result = await draw_func(event, prompt, size)
-                                if (
-                                    result
-                                    and "失败" not in result
-                                    and "错误" not in result
-                                ):
+                                if self.is_draw_success(result):
                                     logger.info("[图像生成检测] 自动调用绘图工具成功")
                                     return True
                                 else:

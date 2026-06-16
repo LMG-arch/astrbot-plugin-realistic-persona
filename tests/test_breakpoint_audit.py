@@ -168,19 +168,25 @@ def test_breakpoint1_personality_evolution_connected():
 def test_breakpoint2_memory_recall_connected():
     """recall_relevant + recall_memory_for_context are wired."""
     main_src = _read_main_py()
+    pi_src = _read_file("managers/prompt_injector.py")
     tm_src = _read_file("managers/thinking_manager.py")
     mm_src = _read_file("core/memory_manager.py")
 
-    assert "recall_memory_for_context" in main_src
+    assert (
+        "recall_memory_for_context" in main_src
+        or "recall_memory_for_context" in pi_src
+    )
     assert "def recall_memory_for_context" in tm_src
     assert "def recall_relevant" in mm_src
 
 
 def test_breakpoint3_sleeping_data_connected():
-    """4 getter methods exist and are consumed in life_manager + main.py."""
+    """4 getter methods exist and are consumed in life_manager + main.py/prompt_injector."""
     eb_src = _read_file("core/experience_bank.py")
     lm_src = _read_file("managers/life_manager.py")
     main_src = _read_main_py()
+    pi_src = _read_file("managers/prompt_injector.py")
+    combined = main_src + pi_src
 
     for getter in [
         "get_recent_projects",
@@ -193,10 +199,10 @@ def test_breakpoint3_sleeping_data_connected():
     assert "get_recent_projects" in lm_src
     assert "get_pending_promises" in lm_src
     assert "get_recent_circadian" in lm_src
-    # main.py injects relationship + has commands
-    assert "get_relationship_profile" in main_src
-    assert "my_promises" in main_src
-    assert "my_projects" in main_src
+    # main.py or prompt_injector injects relationship + has commands
+    assert "get_relationship_profile" in combined
+    assert "my_promises" in combined
+    assert "my_projects" in combined
 
 
 def test_breakpoint4_psychology_loneliness_connected():

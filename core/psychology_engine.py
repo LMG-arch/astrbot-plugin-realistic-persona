@@ -282,12 +282,16 @@ class PsychologyEngine:
                         continue
 
             # 查找最近的匹配情绪事件
-            # NOTE: Substring matching is intentionally broad but can produce false
-            # positives (e.g., "happy" matches "unhappy"). A future improvement could
-            # use exact-match IDs or keyword-based matching with stopwords.
+            # 精确匹配优先，避免 "happy" 误匹配 "unhappy" 等子串问题
+            emotion_id_lower = emotion_id.lower()
             matching = [
-                r for r in records if emotion_id.lower() in r.get("event", "").lower()
+                r for r in records if r.get("event", "").lower() == emotion_id_lower
             ]
+            if not matching:
+                # 退回子串匹配作为兜底
+                matching = [
+                    r for r in records if emotion_id_lower in r.get("event", "").lower()
+                ]
             if matching:
                 record = matching[-1]
                 record["phase"] = phase

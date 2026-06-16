@@ -31,6 +31,8 @@ class AsyncThinkingScheduler:
         think_interval_minutes: int = 20,
         activity_interval_minutes: int = 25,
         on_thought_generated: Callable | None = None,
+        timezone: str = "Asia/Shanghai",
+        local_data_manager=None,
     ):
         """
         初始化调度器
@@ -44,6 +46,8 @@ class AsyncThinkingScheduler:
             context_provider: 异步回调函数，返回 dict 包含 schedule/news/recent_conversations/recent_experiences
             think_interval_minutes: 思考触发间隔(分钟)
             activity_interval_minutes: 活动记录间隔(分钟)
+            timezone: Timezone string for the scheduler, e.g. "Asia/Shanghai"
+            local_data_manager: 本地数据管理器，用于每日过期数据清理
         """
         # 使用传入的引擎实例
         self.thought_engine = thought_engine
@@ -52,9 +56,10 @@ class AsyncThinkingScheduler:
         self.persona_profile = persona_profile
         self.think_interval_minutes = think_interval_minutes
         self.activity_interval_minutes = activity_interval_minutes
+        self.local_data_manager = local_data_manager
 
         # 调度器
-        self.scheduler = AsyncIOScheduler(timezone=zoneinfo.ZoneInfo("Asia/Shanghai"))
+        self.scheduler = AsyncIOScheduler(timezone=zoneinfo.ZoneInfo(timezone))
 
         # 回调函数
         self.on_weather_changed = on_weather_changed
@@ -99,6 +104,17 @@ class AsyncThinkingScheduler:
                 name="daily_review",
                 max_instances=1,
             )
+
+            # 安排每日数据清理任务（凌晨3点）
+            if self.local_data_manager is not None:
+                self.scheduler.add_job(
+                    func=self._daily_cleanup,
+                    trigger="cron",
+                    hour=3,
+                    minute=0,
+                    name="daily_cleanup",
+                    max_instances=1,
+                )
 
             self.scheduler.start()
             self.is_running = True
@@ -243,6 +259,16 @@ class AsyncThinkingScheduler:
 
         except Exception as e:
             logger.error(f"[异步思考] 每日复盘失败: {e}")
+
+    async def _daily_cleanup(self):
+        """每日数据清理任务，清理过期的本地缓存数据"""
+        try:
+            logger.info("[异步思考] 执行每日数据清理")
+            if self.local_data_manager is not None:
+                self.local_data_manager.clear_expired_data(days_to_keep=7)
+                logger.info("[异步思考] 每日数据清理完成")
+        except Exception as e:
+            logger.error(f"[异步思考] 每日数据清理失败: {e}")
 
     def set_weather(self, weather: str):
         """
