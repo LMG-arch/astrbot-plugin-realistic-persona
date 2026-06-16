@@ -778,6 +778,26 @@ pip install -r requirements.txt
 - v1.22.0: 沉睡数据唤醒、记忆召回、孤独感系统增强
 
 - v1.23.0: 全面修复——数据安全、并发竞态、逻辑匹配、架构重构
+
+- v1.24.0: Bug修复与文档合规性审查
+  - **Bug修复**：
+    - 修复 `prompt_injector.py` 中 `get_context(session_id)` 缺少 `await`，导致情绪趋势注入必抛 `AttributeError`
+    - 修复 `experience_manager.py` 中 `record_conversation` 的 `session_id` 字段写入的是 `event.get_session_id()`（如 `12345`），而 `proactive_manager` 按 `unified_msg_origin`（如 `aiocqhttp:Group:12345`）过滤，永远匹配不到对话记录
+    - 修复 `experience_bank.py` 中 `_complete_promise_sync` 用 `atomic_write_json` 将 JSONL 文件写成 JSON 数组，破坏一行一 JSON 格式，后续按行读取全部失败
+  - **测试修复**：
+    - 修复 `test_functional.py` 中 `TestConfigSchema` 使用相对路径 `open("_conf_schema.json")` 导致 `FileNotFoundError`（3个测试失败），改为 `Path(__file__).parent.parent / "_conf_schema.json"` 绝对路径
+  - **文档合规性审查**（按 AstrBot 开发文档逐条校验）：
+    - `ruff format .` + `ruff check .` — 通过
+    - 持久化数据通过 `StarTools.get_data_dir()` 存 data 目录 — 通过
+    - 路径使用 `pathlib.Path`，无 `os.path` — 通过
+    - 所有 Handler 在插件类中注册 — 通过
+    - Handler 前两个参数为 `self`, `event` — 通过
+    - `on_llm_request` / `on_llm_response` 钩子不使用 `yield` — 通过
+    - `llm_tool` docstring 格式合规 — 通过
+    - `metadata.yaml` 元数据完整 — 通过
+    - 新增注释全部英文 — 通过
+    - 错误处理覆盖关键路径 — 通过
+  - **测试**：127 passed, 0 failed, 5 skipped；ruff format + check 零错误
   - **数据安全**：
     - 修复 `memory_manager` decay 操作损坏 JSONL 格式（`atomic_write_json` 写出 JSON 数组 → 改为逐行 JSONL 重写，与 append 语义兼容）
     - `AsyncThinkingScheduler` 时区参数化（移除硬编码 `Asia/Shanghai`，从用户配置读取）
