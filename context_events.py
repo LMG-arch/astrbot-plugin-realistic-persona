@@ -61,7 +61,9 @@ class EventDetector:
         "午安",
     ]
 
-    _PUNCTUATION = str.maketrans("", "", "，。！？、；：""''【】《》（）…—·,.!?;:\"'()[]{} ")
+    _PUNCTUATION = str.maketrans(
+        "", "", "，。！？、；：''【】《》（）…—·,.!?;:\"'()[]{} "
+    )
 
     @staticmethod
     def is_greeting(message: str) -> bool:
@@ -163,7 +165,9 @@ class EventTrigger:
         # Note: Only detect idle if the user was idle *before* sending this message,
         # not if the current message itself is what ended the idle period.
         # We record idle as a fact about the gap, but skip if this is the trigger.
-        idle_duration = (current_time - self.last_message_time) if self.last_message_time else 0
+        idle_duration = (
+            (current_time - self.last_message_time) if self.last_message_time else 0
+        )
         if idle_duration > IDLE_THRESHOLD_SECONDS:
             events.append(
                 ContextEvent(

@@ -17,6 +17,8 @@ import aiohttp
 
 from astrbot.api import logger
 
+from .utils import atomic_write_json
+
 
 class NewsGetter:
     """新闻获取器
@@ -416,8 +418,7 @@ class NewsGetter:
             cache[today_str] = news_data
 
             # 写入缓存
-            with open(self.news_cache_file, "w", encoding="utf-8") as f:
-                json.dump(cache, f, ensure_ascii=False, indent=2)
+            atomic_write_json(self.news_cache_file, cache)
 
             logger.debug(f"[新闻获取器] 新闻缓存已保存: {today_str}")
             return True

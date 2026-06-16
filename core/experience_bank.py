@@ -708,7 +708,9 @@ class ExperienceBank:
         # 计算互动间隔变化
         if len(interactions) > 1:
             timestamps = [
-                datetime.fromisoformat(i["timestamp"]) for i in interactions if i.get("timestamp")
+                datetime.fromisoformat(i["timestamp"])
+                for i in interactions
+                if i.get("timestamp")
             ]
             intervals = [
                 (timestamps[i + 1] - timestamps[i]).total_seconds()

@@ -246,7 +246,9 @@ class ExpressionEvolution:
             # by removing random unused words, simulating forgetting
             if len(self.learned_words) > 50 and random.random() < 0.1:
                 # Remove up to 5 random words to simulate natural forgetting
-                to_remove = random.sample(list(self.learned_words), min(5, len(self.learned_words) // 10))
+                to_remove = random.sample(
+                    list(self.learned_words), min(5, len(self.learned_words) // 10)
+                )
                 for w in to_remove:
                     self.learned_words.discard(w)
                 new_level = min(10, len(self.learned_words) // 100 + 1)

@@ -33,7 +33,9 @@ class LifeManager(BaseManager):
             if news_window_end > self.state.news_hour:
                 in_news_window = self.state.news_hour <= now.hour < news_window_end
             else:
-                in_news_window = now.hour >= self.state.news_hour or now.hour < news_window_end
+                in_news_window = (
+                    now.hour >= self.state.news_hour or now.hour < news_window_end
+                )
             if in_news_window:
                 news = await self.maybe_fetch_news(now)
                 if news:

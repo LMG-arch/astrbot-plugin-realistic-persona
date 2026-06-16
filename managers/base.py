@@ -198,7 +198,9 @@ class SharedState:
             )
             logger.info("自动Profile更新器已初始化")
 
-        if self.enable_async_thinking:
+        # Base thinking/memory subsystems: created when async thinking OR
+        # life story engine is enabled (life story depends on these modules).
+        if self.enable_async_thinking or self.enable_life_story:
             thought_dir = (
                 StarTools.get_data_dir("astrbot_plugin_realistic_persona") / "thoughts"
             )
@@ -268,6 +270,25 @@ class SharedState:
                 )
             else:
                 logger.info("新闻获取模块未启用")
+
+        # Async thinking scheduler (only when async thinking is enabled)
+        if self.enable_async_thinking and self.thought_engine and self.experience_bank:
+            # llm_action / context_provider / on_thought_generated are bound
+            # later at runtime (llm_action after Qzone init, callbacks from Main).
+            self.async_thinking_scheduler = AsyncThinkingScheduler(
+                thought_engine=self.thought_engine,
+                experience_bank=self.experience_bank,
+                llm_action=None,
+                persona_profile=self.persona_profile,
+                think_interval_minutes=self.think_interval_minutes,
+                activity_interval_minutes=self.activity_interval_minutes,
+                on_thought_generated=None,
+                context_provider=None,
+            )
+            logger.info(
+                f"异步思考调度器已初始化（思考间隔: {self.think_interval_minutes}分钟, "
+                f"活动间隔: {self.activity_interval_minutes}分钟）"
+            )
 
     def get_provider_id(self) -> str | None:
         """Get the current LLM provider ID."""

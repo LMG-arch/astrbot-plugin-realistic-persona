@@ -319,7 +319,11 @@ class LifeStoryEngine:
                 prompt=prompt, system_prompt=self._get_story_system_prompt()
             )
 
-            if response and hasattr(response, "completion_text") and response.completion_text:
+            if (
+                response
+                and hasattr(response, "completion_text")
+                and response.completion_text
+            ):
                 story_update = response.completion_text.strip()
 
                 # 解析并更新人生故事
@@ -470,7 +474,11 @@ class LifeStoryEngine:
                 system_prompt="你是一个文本压缩专家，擅长用最少的字数表达最多的信息。请将提供的人生故事压缩为精简的上下文提示。",
             )
 
-            if response and hasattr(response, "completion_text") and response.completion_text:
+            if (
+                response
+                and hasattr(response, "completion_text")
+                and response.completion_text
+            ):
                 compact_context = response.completion_text.strip()
 
                 self.context_cache = {

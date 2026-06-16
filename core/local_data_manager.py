@@ -10,6 +10,8 @@ from typing import Any
 
 from astrbot.api import logger
 
+from .utils import atomic_write_json
+
 
 class LocalDataManager:
     """本地数据管理器"""
@@ -121,10 +123,8 @@ class LocalDataManager:
             return {}
 
     def _save_json_file(self, file_path: Path, data: dict[str, Any]):
-        """保存JSON文件"""
-        file_path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        """Save JSON file atomically."""
+        atomic_write_json(file_path, data)
 
     def save_drawing_prompt(self, prompt: str, enhanced_prompt: str):
         """保存绘画提示词

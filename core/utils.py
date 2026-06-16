@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import tempfile
@@ -17,12 +18,22 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
 BytesOrStr = Union[str, bytes]  # noqa: UP007
 
 
+def stable_hash(text: str) -> int:
+    """Return a stable integer hash (0-2**32-1) that does not vary across
+    Python processes (unlike the built-in ``hash()`` which is randomized
+    when PYTHONHASHSEED is set).
+
+    Uses the first 8 bytes of md5 to produce a 64-bit value, then masks to
+    32 bits for safe modular arithmetic.
+    """
+    digest = hashlib.md5(text.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "little") & 0xFFFFFFFF
+
+
 def atomic_write_json(file_path: Path | str, data: Any) -> None:
     """Atomically write JSON data to a file (write-to-temp then rename)."""
     file_path = Path(file_path)
-    fd, tmp_path = tempfile.mkstemp(
-        dir=file_path.parent, suffix=".tmp", prefix=".tmp_"
-    )
+    fd, tmp_path = tempfile.mkstemp(dir=file_path.parent, suffix=".tmp", prefix=".tmp_")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)

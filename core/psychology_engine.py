@@ -99,12 +99,16 @@ class PsychologyEngine:
                 }
             )
             # 防止无限增长，保留最近100条
-            drives["curiosity"]["topics_explored"] = drives["curiosity"]["topics_explored"][-100:]
+            drives["curiosity"]["topics_explored"] = drives["curiosity"][
+                "topics_explored"
+            ][-100:]
 
             drives["curiosity"]["last_exploration"] = datetime.now().isoformat()
 
             # 好奇心稍微提升
-            drives["curiosity"]["level"] = round(min(10, drives["curiosity"]["level"] + 0.5), 1)
+            drives["curiosity"]["level"] = round(
+                min(10, drives["curiosity"]["level"] + 0.5), 1
+            )
 
             with open(self.drives_file, "w", encoding="utf-8") as f:
                 json.dump(drives, f, ensure_ascii=False, indent=2)
@@ -144,7 +148,9 @@ class PsychologyEngine:
             drives["expression"]["last_expression"] = datetime.now().isoformat()
 
             # 成功表达后表达欲会降低（满足了）
-            drives["expression"]["level"] = round(max(1, drives["expression"]["level"] - 0.5), 1)
+            drives["expression"]["level"] = round(
+                max(1, drives["expression"]["level"] - 0.5), 1
+            )
 
             with open(self.drives_file, "w", encoding="utf-8") as f:
                 json.dump(drives, f, ensure_ascii=False, indent=2)
@@ -196,7 +202,9 @@ class PsychologyEngine:
             drives["connection"]["interaction_count"] += 1
 
             # 互动满足连接需求，连接驱力降低
-            drives["connection"]["level"] = round(max(1, drives["connection"]["level"] - 0.3), 1)
+            drives["connection"]["level"] = round(
+                max(1, drives["connection"]["level"] - 0.3), 1
+            )
 
             with open(self.drives_file, "w", encoding="utf-8") as f:
                 json.dump(drives, f, ensure_ascii=False, indent=2)

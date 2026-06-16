@@ -46,6 +46,7 @@ except ImportError as e:
     QZONE_AVAILABLE = False
     logger.warning(f"QQ空间模块未完全加载: {e}")
 
+from .core.utils import stable_hash
 from .managers import (
     EmotionManager,
     ExperienceManager,
@@ -150,7 +151,7 @@ class ThinkingLLM:
     "astrbot_plugin_realistic_persona",
     "LMG-arch",
     "拟人化角色行为系统：情绪感知、生活模拟、QQ空间日记、AI配图、异步思考、人格演化、人生故事引擎等",
-    "1.20.3",
+    "1.21.0",
     "https://github.com/LMG-arch/astrbot-plugin-realistic-persona.git",
 )
 class Main(Star):
@@ -301,6 +302,17 @@ class Main(Star):
 
             if self.state.enable_async_thinking and self.state.async_thinking_scheduler:
                 try:
+                    # Bind runtime callbacks before starting the scheduler
+                    self.state.async_thinking_scheduler.context_provider = (
+                        self.life_manager.get_thinking_context
+                    )
+                    if (
+                        self.state.enable_profile_update_from_thinking
+                        and self.profile_manager
+                    ):
+                        self.state.async_thinking_scheduler.on_thought_generated = (
+                            self.profile_manager.on_thought_for_profile_update
+                        )
                     self.state.async_thinking_scheduler.start()
                     logger.info("异步思考循环已启动")
                 except Exception as e:
@@ -326,14 +338,26 @@ class Main(Star):
                 and self.state.enable_proactive_sharing
             ):
                 try:
+                    import zoneinfo
+
                     from apscheduler.schedulers.asyncio import AsyncIOScheduler
                     from apscheduler.triggers.interval import IntervalTrigger
 
-                    self.state._proactive_share_scheduler = AsyncIOScheduler()
+                    tz = self.context.get_config().get("timezone")
+                    share_timezone = (
+                        zoneinfo.ZoneInfo(tz)
+                        if tz
+                        else zoneinfo.ZoneInfo("Asia/Shanghai")
+                    )
+
+                    self.state._proactive_share_scheduler = AsyncIOScheduler(
+                        timezone=share_timezone
+                    )
                     self.state._proactive_share_scheduler.add_job(
                         func=self._check_and_share_life,
                         trigger=IntervalTrigger(
-                            minutes=self.state.proactive_share_interval_minutes
+                            minutes=self.state.proactive_share_interval_minutes,
+                            timezone=share_timezone,
                         ),
                         name="proactive_share",
                         max_instances=1,
@@ -437,47 +461,34 @@ class Main(Star):
                 except Exception as e:
                     logger.debug(f"停止主动消息调度器失败: {e}")
 
-            if (
-                hasattr(self.state, "_proactive_share_scheduler")
-                and self.state._proactive_share_scheduler
-            ):
+            if self.state._proactive_share_scheduler is not None:
                 try:
                     self.state._proactive_share_scheduler.shutdown(wait=False)
                     logger.debug("主动分享调度器已停止")
                 except Exception as e:
                     logger.debug(f"停止主动分享调度器失败: {e}")
 
-            if hasattr(self.state, "emotion_contexts"):
-                self.state.emotion_contexts.clear()
-
-            if hasattr(self.state, "_weather_cache"):
-                self.state._weather_cache.clear()
-            if hasattr(self.state, "_news_cache"):
-                self.state._news_cache.clear()
-            if hasattr(self.state, "_schedule_cache"):
-                self.state._schedule_cache.clear()
-            if hasattr(self.state, "favorability"):
-                self.state.favorability.clear()
-            if hasattr(self.state, "life_state"):
-                self.state.life_state.clear()
+            self.state.emotion_contexts.clear()
+            self.state._weather_cache.clear()
+            self.state._news_cache.clear()
+            self.state._schedule_cache.clear()
+            self.state.favorability.clear()
+            self.state.life_state.clear()
 
             if self.state.enable_qzone and QZONE_AVAILABLE:
-                if hasattr(self.state, "qzone"):
+                if self.state.qzone is not None:
                     try:
                         await self.state.qzone.terminate()
                         logger.debug("QQ空间模块已清理")
                     except Exception as e:
                         logger.debug(f"清理QQ空间模块失败: {e}")
-                if hasattr(self.state, "auto_publish"):
+                if self.state.auto_publish is not None:
                     try:
                         await self.state.auto_publish.terminate()
                         logger.debug("自动发布模块已清理")
                     except Exception as e:
                         logger.debug(f"清理自动发布模块失败: {e}")
-                if (
-                    hasattr(self.state, "_comment_check_scheduler")
-                    and self.state._comment_check_scheduler
-                ):
+                if self.state._comment_check_scheduler is not None:
                     try:
                         self.state._comment_check_scheduler.shutdown(wait=False)
                         logger.debug("独立评论检查调度器已清理")
@@ -601,8 +612,19 @@ class Main(Star):
 
         logger.info("[QQ空间] 初始化完成！")
         logger.info(
-            f"[QQ空间] 组件状态: qzone={'OK' if hasattr(self.state, 'qzone') else 'MISSING'}, llm={'OK' if hasattr(self.state, 'llm') else 'MISSING'}, operator={'OK' if hasattr(self.state, 'operator') else 'MISSING'}"
+            f"[QQ空间] 组件状态: qzone={'OK' if self.state.qzone is not None else 'MISSING'}, "
+            f"llm={'OK' if self.state.llm is not None else 'MISSING'}, "
+            f"operator={'OK' if self.state.operator is not None else 'MISSING'}"
         )
+
+        # Now that llm_action is available, bind it to the thinking scheduler
+        if (
+            self.state.enable_async_thinking
+            and self.state.async_thinking_scheduler
+            and self.state.llm
+        ):
+            self.state.async_thinking_scheduler.llm_action = self.state.llm
+            logger.debug("[QQ空间] 已将 llm_action 绑定到异步思考调度器")
 
     def _start_standalone_comment_check(self):
         try:
@@ -635,19 +657,13 @@ class Main(Star):
 
     async def _standalone_check_and_reply_comments(self):
         try:
-            if not hasattr(self.state, "operator") or not self.state.operator:
+            if self.state.operator is None:
                 logger.debug("[独立评论检查] operator 未初始化，跳过")
                 return
-            if (
-                not hasattr(self.state.operator, "qzone")
-                or not self.state.operator.qzone
-            ):
+            if self.state.operator.qzone is None:
                 logger.debug("[独立评论检查] operator.qzone 未初始化，跳过")
                 return
-            if (
-                not hasattr(self.state.operator.qzone, "ctx")
-                or not self.state.operator.qzone.ctx
-            ):
+            if self.state.operator.qzone.ctx is None:
                 logger.debug("[独立评论检查] operator.qzone.ctx 未初始化，跳过")
                 return
             logger.debug("[独立评论检查] 开始检查新评论并回复")
@@ -715,7 +731,9 @@ class Main(Star):
                     if isinstance(msg, dict) and "content" in msg:
                         if "time_info" not in msg:
                             msg_timestamp = msg.get("timestamp", current_timestamp)
-                            time_diff_seconds = max(0, int(current_timestamp - msg_timestamp))
+                            time_diff_seconds = max(
+                                0, int(current_timestamp - msg_timestamp)
+                            )
 
                             if time_diff_seconds < 60:
                                 time_diff_str = f"{time_diff_seconds}秒前"
@@ -852,7 +870,7 @@ class Main(Star):
         if (
             self.state.enable_async_thinking
             and self.state.personality_evolution
-            and abs(hash(event.get_session_id())) % 10 == 0
+            and stable_hash(event.get_session_id()) % 10 == 0
         ):
             try:
                 summary = self.state.personality_evolution.get_personality_summary()
@@ -1325,7 +1343,9 @@ class Main(Star):
             logger.error(f"[工具调用] 解析失败: {e}")
             return None
 
-    async def execute_tool_call(self, tool_name: str, params: dict, event=None) -> str | None:
+    async def execute_tool_call(
+        self, tool_name: str, params: dict, event=None
+    ) -> str | None:
         if tool_name == "draw":
             original_prompt = params.get("prompt", "")
             if not original_prompt:
@@ -1376,7 +1396,7 @@ class Main(Star):
                 logger.debug(f"[经历银行] 记录AI回复失败: {e}")
 
         if self.state.auto_profile_updater and isinstance(event, AiocqhttpMessageEvent):
-            from .emotions import EMOTION_INTENSITY_MAP, EmotionAnalyzer, EmotionType
+            from .emotions import EMOTION_INTENSITY_MAP, EmotionAnalyzer
 
             self.state._cached_bot = event.bot
 

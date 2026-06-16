@@ -802,7 +802,9 @@ class LLMAction:
         ]
         if persona_profile:
             # Truncate persona_profile to prevent prompt injection via excessively long input
-            life_header.append(f"以下是你的角色设定，请保持一致：{persona_profile[:500]}")
+            life_header.append(
+                f"以下是你的角色设定，请保持一致：{persona_profile[:500]}"
+            )
         if weather_desc:
             life_header.append(f"你所在城市的天气概况：{weather_desc}")
         if schedule_text:
@@ -939,9 +941,9 @@ class LLMAction:
                 prompt=prompt,
                 image_urls=post.images,
             )
-            comment = re.sub(r"[\s\u3000]+", "", llm_response.completion_text or "").rstrip(
-                "。"
-            )
+            comment = re.sub(
+                r"[\s\u3000]+", "", llm_response.completion_text or ""
+            ).rstrip("。")
             logger.info(f"LLM 生成的评论：{comment}")
             return comment
 

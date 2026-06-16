@@ -92,7 +92,9 @@ class Qzone:
             c = {k: v.value for k, v in SimpleCookie(cookie_str).items()}
             uin_str = c.get("uin", "0")
             if not uin_str.startswith("o"):
-                raise RuntimeError(f"Cookie 中 uin 格式异常，缺少 'o' 前缀: {uin_str!r}")
+                raise RuntimeError(
+                    f"Cookie 中 uin 格式异常，缺少 'o' 前缀: {uin_str!r}"
+                )
             uin = int(uin_str[1:])
             if not uin:
                 raise RuntimeError("Cookie 中缺少合法 uin")
@@ -161,7 +163,7 @@ class Qzone:
     async def _handle_server_error(self, status: int, attempt: int) -> bool:
         if status in [500, 502, 503]:
             if attempt < self.MAX_RETRIES:
-                wait = min(30, (2 ** attempt) + random.uniform(0, 1))
+                wait = min(30, (2**attempt) + random.uniform(0, 1))
                 logger.warning(
                     f"[QQ空间] 服务器错误({status})，{wait:.1f}秒后重试 ({attempt}/{self.MAX_RETRIES})..."
                 )
@@ -174,7 +176,7 @@ class Qzone:
 
     async def _handle_rate_limit(self, attempt: int) -> bool:
         if attempt < self.MAX_RETRIES:
-            wait = min(30, (2 ** attempt) + random.uniform(0, 1))
+            wait = min(30, (2**attempt) + random.uniform(0, 1))
             logger.warning(
                 f"[QQ空间] 触发限流(-10000)，等待 {wait:.1f}秒重试 ({attempt}/{self.MAX_RETRIES})..."
             )
@@ -231,7 +233,9 @@ class Qzone:
             if status == 429:
                 if await self._handle_rate_limit(attempt):
                     continue
-                raise RuntimeError(f"请求失败，状态码: 429（重试{self.MAX_RETRIES}次后仍失败）")
+                raise RuntimeError(
+                    f"请求失败，状态码: 429（重试{self.MAX_RETRIES}次后仍失败）"
+                )
             if status not in [200, 401, 403]:
                 raise RuntimeError(f"请求失败，状态码: {status}")
 
@@ -241,7 +245,9 @@ class Qzone:
             parse_data = self._parse_json(resp_text, debug)
             code = parse_data.get("code")
 
-            auth_expired, params, data = await self._handle_auth_expired(status, code, params, data)
+            auth_expired, params, data = await self._handle_auth_expired(
+                status, code, params, data
+            )
             if auth_expired:
                 continue
 

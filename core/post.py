@@ -2,11 +2,10 @@
 
 import json
 import re
+import sqlite3
 import typing
 from datetime import datetime
 from pathlib import Path
-
-import sqlite3
 
 import aiosqlite
 import pydantic

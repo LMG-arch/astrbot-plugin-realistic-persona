@@ -3,6 +3,7 @@ from datetime import datetime
 
 from astrbot.api import logger
 
+from ..core.utils import stable_hash
 from .base import BaseManager
 
 
@@ -76,7 +77,7 @@ class ExperienceManager(BaseManager):
             self.detect_and_record_promises(user_message, session_id)
             self.record_circadian_state()
 
-            if self.state.experience_bank and abs(hash(session_id)) % 30 == 0:
+            if self.state.experience_bank and stable_hash(session_id) % 30 == 0:
                 self.analyze_relationship_network(session_id)
 
             if self.state.psychology_engine:
@@ -98,7 +99,7 @@ class ExperienceManager(BaseManager):
                     session_id=session_id,
                 )
 
-                if abs(hash(session_id)) % 30 == 0:
+                if stable_hash(session_id) % 30 == 0:
                     logger.debug("[记忆管理] 执行记忆衰减")
                     self.state.memory_manager.apply_memory_decay(days_threshold=30)
 

@@ -11,11 +11,11 @@ from datetime import datetime
 from pathlib import Path
 
 from astrbot.api import logger
-
-from .utils import atomic_write_json
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
 )
+
+from .utils import atomic_write_json
 
 
 class AutoProfileUpdater:
@@ -453,7 +453,9 @@ class AutoProfileUpdater:
             更新结果字典 {nickname: bool, signature: bool, avatar: bool}
         """
         async with self._update_lock:
-            return await self._do_check_and_update(event, emotion, intensity, llm_action)
+            return await self._do_check_and_update(
+                event, emotion, intensity, llm_action
+            )
 
     async def _do_check_and_update(
         self,
