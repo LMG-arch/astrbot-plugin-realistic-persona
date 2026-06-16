@@ -736,20 +736,6 @@ pip install -r requirements.txt
   - **修复默认值不一致**：`core/llm_action.py`中`ms_model`默认值`iic/sdxl-turbo`→`Qwen/Qwen-Image`、`size`默认值`1080x1920`→`1024x1024`、`api_url`默认值`api.modelscope.com`→`api-inference.modelscope.cn`；`core/scheduler.py`中`insomnia_probability`默认值`0.2`→`0.15`——统一与schema声明一致
   - **审计结果**：73个配置项全部可正常工作，1个废弃配置已移除，5个冗余赋值已清理，1个隐藏崩溃已修复，默认值全部对齐
 
-- v1.22.0: 沉睡数据唤醒、记忆召回、孤独感系统增强
-  - **沉睡数据读取**：经历银行新增4个数据读取方法，激活已有但未被消费的数据
-    - `get_recent_projects()`：读取项目记录（支持按状态过滤）
-    - `get_pending_promises()`：读取未兑现的承诺
-    - `get_recent_circadian()`：读取最近生物钟状态（精力/心情）
-    - `get_relationship_profile()`：读取指定用户的关系画像（互动次数/关系标签）
-  - **记忆召回**：ThinkingManager 新增 `recall_memory_for_context()`，对话时自动召回与当前话题相关的历史记忆注入 LLM 上下文
-  - **孤独感主动消息**：基于 PsychologyEngine 的 `check_connection_need()` 检测角色孤独感，自动向目标会话发送问候（每小时最多触发一次，需配置白名单）
-  - **生活上下文增强**：`build_life_context()` 注入沉睡数据（正在进行的项目、未兑现的承诺、当前精力/心情状态）
-  - **人生故事更新去QQ依赖**：`update_life_story_async()` 不再硬依赖 `self.state.llm`（QQ空间 LLMAction），改为优先使用 context 获取 LLM provider，使人生故事引擎在未启用 QQ 空间时也能正常工作
-  - **人格演化 API 适配**：主动分享模块从 `get_status()` 迁移到 `get_personality_summary()`，词汇/幽默度改为 0-10 整数刻度
-  - **成长摘要扩展**：`get_growth_summary()` 返回值新增 skills/interests/views 原始集合（此前仅有计数）
-  - **新增测试**：`test_breakpoint_audit.py` 覆盖关键断点审计
-
 - v1.21.0: 全面代码审查与修复——131项问题修复
   - **全面代码审查**：5个并行审查员对15,000行代码逐行审查，发现并修复131项问题（9 Critical、43 Important、40 Medium、39 Minor）
   - **架构重构**：
@@ -784,6 +770,8 @@ pip install -r requirements.txt
     - 重写 `test_managers.py`，匹配实际 SharedState/BaseManager/EmotionManager API
     - 修复测试导入问题（插件包注册、mock 模块补全）
     - 57 项测试全部通过
+
+- v1.22.0: 沉睡数据唤醒、记忆召回、孤独感系统增强
 
 
 ## 致谢
