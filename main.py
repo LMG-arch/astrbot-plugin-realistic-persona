@@ -2,7 +2,7 @@
 拟人化角色行为系统插件 (Realistic Persona Plugin)
 整合了情绪感知、生活模拟、QQ空间日记、AI配图等功能
 
-版本: v1.21.0
+版本: v1.22.0
 作者: LMG-arch
 最后更新: 2025-05-13
 符合AstrBot插件开发完全指南规范
@@ -151,7 +151,7 @@ class ThinkingLLM:
     "astrbot_plugin_realistic_persona",
     "LMG-arch",
     "拟人化角色行为系统：情绪感知、生活模拟、QQ空间日记、AI配图、异步思考、人格演化、人生故事引擎等",
-    "1.21.0",
+    "1.22.0",
     "https://github.com/LMG-arch/astrbot-plugin-realistic-persona.git",
 )
 class Main(Star):
@@ -333,6 +333,36 @@ class Main(Star):
                 except Exception as e:
                     logger.error(f"启动主动消息调度器失败: {e}")
 
+                # Register loneliness-triggered proactive messaging (every 30 min)
+                if self.state.psychology_engine:
+                    try:
+                        import zoneinfo
+
+                        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+                        from apscheduler.triggers.interval import IntervalTrigger
+
+                        tz = self.context.get_config().get("timezone")
+                        loneliness_tz = (
+                            zoneinfo.ZoneInfo(tz)
+                            if tz
+                            else zoneinfo.ZoneInfo("Asia/Shanghai")
+                        )
+
+                        self.state._loneliness_scheduler = AsyncIOScheduler(
+                            timezone=loneliness_tz
+                        )
+                        self.state._loneliness_scheduler.add_job(
+                            func=self.proactive_mgr.check_loneliness_and_act,
+                            trigger=IntervalTrigger(minutes=30, timezone=loneliness_tz),
+                            kwargs={"life_manager": self.life_manager},
+                            name="loneliness_check",
+                            max_instances=1,
+                        )
+                        self.state._loneliness_scheduler.start()
+                        logger.info("[孤独感检查] 已启动，每30分钟检查一次")
+                    except Exception as e:
+                        logger.error(f"启动孤独感检查调度器失败: {e}")
+
             if (
                 self.state.enable_proactive_messages
                 and self.state.enable_proactive_sharing
@@ -467,6 +497,13 @@ class Main(Star):
                     logger.debug("主动分享调度器已停止")
                 except Exception as e:
                     logger.debug(f"停止主动分享调度器失败: {e}")
+
+            if self.state._loneliness_scheduler is not None:
+                try:
+                    self.state._loneliness_scheduler.shutdown(wait=False)
+                    logger.debug("孤独感检查调度器已停止")
+                except Exception as e:
+                    logger.debug(f"停止孤独感检查调度器失败: {e}")
 
             self.state.emotion_contexts.clear()
             self.state._weather_cache.clear()
@@ -770,13 +807,12 @@ class Main(Star):
                     self.state.life_story_engine.set_base_persona(current_persona)
 
                 if self.state.life_story_engine.should_update():
-                    if hasattr(self.state, "llm") and self.state.llm:
-                        task = asyncio.create_task(
-                            self.thinking_manager.update_life_story_async()
-                        )
-                        self.state._background_tasks.add(task)
-                        task.add_done_callback(self.state._background_tasks.discard)
-                        logger.info("[人生故事] 后台更新经历线已触发")
+                    task = asyncio.create_task(
+                        self.thinking_manager.update_life_story_async()
+                    )
+                    self.state._background_tasks.add(task)
+                    task.add_done_callback(self.state._background_tasks.discard)
+                    logger.info("[人生故事] 后台更新经历线已触发")
 
                 story_context = self.state.life_story_engine.get_context_for_llm()
                 if story_context:
@@ -792,6 +828,22 @@ class Main(Star):
 
             except Exception as e:
                 logger.error(f"人生故事引擎处理失败: {e}")
+
+        if self.state.enable_async_thinking and self.state.memory_manager:
+            try:
+                memory_text = await self.thinking_manager.recall_memory_for_context(
+                    event
+                )
+                if memory_text:
+                    memory_hint = f"\n[相关记忆]\n{memory_text}"
+                    if hasattr(request, "system_prompt"):
+                        if request.system_prompt:
+                            request.system_prompt += memory_hint
+                        else:
+                            request.system_prompt = memory_hint
+                    logger.debug(f"[记忆召回] 已注入记忆，长度: {len(memory_text)}字符")
+            except Exception as e:
+                logger.debug(f"[记忆召回] 注入失败: {e}")
 
         if self.state.enable_emotion_detection:
             try:
@@ -912,6 +964,27 @@ class Main(Star):
 
                 if self.state.personality_evolution:
                     self.state.personality_evolution.daily_routine()
+
+                # Inject relationship profile for differentiated interactions
+                try:
+                    rel_profile = self.state.experience_bank.get_relationship_profile(
+                        session_id
+                    )
+                    if rel_profile and rel_profile.get("interaction_count", 0) > 5:
+                        rel_hint = (
+                            f"\n[与该用户的关系] "
+                            f"互动{rel_profile['interaction_count']}次"
+                        )
+                        chars = rel_profile.get("relationship_characteristics", "")
+                        if chars:
+                            rel_hint += f"，特点：{chars}"
+                        if hasattr(request, "system_prompt"):
+                            if request.system_prompt:
+                                request.system_prompt += rel_hint
+                            else:
+                                request.system_prompt = rel_hint
+                except Exception:
+                    pass
 
             except Exception as e:
                 logger.error(f"记录用户交互失败: {e}")
@@ -1216,6 +1289,52 @@ class Main(Star):
         except Exception as e:
             yield event.plain_result(f"获取经历银行状态失败: {str(e)}")
 
+    @filter.command("my_promises")
+    async def check_my_promises(self, event: AstrMessageEvent):
+        if not self.state.enable_async_thinking or not self.state.experience_bank:
+            yield event.plain_result("经历银行未启用（需启用异步思考系统）")
+            return
+
+        try:
+            promises = self.state.experience_bank.get_pending_promises(limit=10)
+            if not promises:
+                yield event.plain_result("暂无待完成的承诺")
+                return
+
+            lines = ["📋 待完成的承诺：\n"]
+            for i, p in enumerate(promises, 1):
+                promise_text = p.get("promise", "")[:60]
+                date_str = p.get("date", "")
+                lines.append(f"{i}. [{date_str}] {promise_text}")
+
+            yield event.plain_result("\n".join(lines))
+        except Exception as e:
+            yield event.plain_result(f"获取承诺失败: {str(e)}")
+
+    @filter.command("my_projects")
+    async def check_my_projects(self, event: AstrMessageEvent):
+        if not self.state.enable_async_thinking or not self.state.experience_bank:
+            yield event.plain_result("经历银行未启用（需启用异步思考系统）")
+            return
+
+        try:
+            projects = self.state.experience_bank.get_recent_projects(
+                status="in_progress", limit=10
+            )
+            if not projects:
+                yield event.plain_result("暂无进行中的项目")
+                return
+
+            lines = ["📌 进行中的项目：\n"]
+            for i, p in enumerate(projects, 1):
+                name = p.get("project_name", "")[:40]
+                date_str = p.get("date", "")
+                lines.append(f"{i}. [{date_str}] {name}")
+
+            yield event.plain_result("\n".join(lines))
+        except Exception as e:
+            yield event.plain_result(f"获取项目失败: {str(e)}")
+
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("发说说")
     async def publish_feed(self, event: AiocqhttpMessageEvent):
@@ -1394,6 +1513,17 @@ class Main(Star):
                 )
             except Exception as e:
                 logger.debug(f"[经历银行] 记录AI回复失败: {e}")
+
+        if self.state.enable_async_thinking and self.state.personality_evolution:
+            try:
+                user_msg = ""
+                if hasattr(event, "message_obj"):
+                    user_msg = event.message_obj.message_str or ""
+                self.state.personality_evolution.process_interaction(
+                    user_msg[:200], text[:200]
+                )
+            except Exception as e:
+                logger.debug(f"[人格演化] process_interaction 失败: {e}")
 
         if self.state.auto_profile_updater and isinstance(event, AiocqhttpMessageEvent):
             from .emotions import EMOTION_INTENSITY_MAP, EmotionAnalyzer

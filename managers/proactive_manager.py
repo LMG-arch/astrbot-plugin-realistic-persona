@@ -1,4 +1,5 @@
 import random
+import time
 from datetime import datetime
 
 from astrbot.api import logger
@@ -305,14 +306,16 @@ class ProactiveManager(BaseManager):
                     hasattr(self.state, "personality_evolution")
                     and self.state.personality_evolution
                 ):
-                    evo_status = self.state.personality_evolution.get_status()
-                    if evo_status:
-                        style = evo_status.get("expression_style", {})
-                        if style:
-                            vocab = style.get("vocabulary_level", 0.5)
-                            humor = style.get("humor_level", 0.5)
+                    evo_summary = (
+                        self.state.personality_evolution.get_personality_summary()
+                    )
+                    if evo_summary:
+                        expr = evo_summary.get("expression_levels", {})
+                        if expr:
+                            vocab = expr.get("vocabulary", 5)
+                            humor = expr.get("humor", 5)
                             context_parts.append(
-                                f"[性格特点：词汇水平{vocab:.1f}，幽默感{humor:.1f}]"
+                                f"[性格特点：词汇水平{vocab}/10，幽默感{humor}/10]"
                             )
             except Exception as e:
                 logger.debug(f"[主动分享] 获取人格演化失败: {e}")
@@ -382,3 +385,65 @@ class ProactiveManager(BaseManager):
         except Exception as e:
             logger.debug(f"[主动消息] 获取会话列表失败: {e}")
         return sessions
+
+    # Loneliness-triggered proactive messaging: rate-limited to once per hour
+    _last_loneliness_trigger: float = 0.0
+    _loneliness_cooldown: int = 3600
+
+    async def check_loneliness_and_act(self, life_manager=None):
+        """Check psychology engine for loneliness and send a proactive message.
+
+        Rate-limited: triggers at most once per hour.
+        Only acts when a target session whitelist is configured.
+        """
+        try:
+            if not self.state.psychology_engine:
+                return
+
+            # Rate limit check
+            now_ts = time.time()
+            if now_ts - self._last_loneliness_trigger < self._loneliness_cooldown:
+                logger.debug("[孤独感检查] 冷却中，跳过")
+                return
+
+            connection = self.state.psychology_engine.check_connection_need()
+            if not connection.get("feels_lonely"):
+                return
+
+            target_sessions = self.config.get("proactive_target_sessions", "")
+            if not target_sessions:
+                logger.debug("[孤独感检查] 未配置目标会话白名单，跳过")
+                return
+
+            allowed = [s.strip() for s in target_sessions.split(",") if s.strip()]
+            if not allowed:
+                return
+
+            # Pick the first allowed session
+            session_id = allowed[0]
+
+            logger.info(
+                f"[孤独感检查] 角色感到孤独（已无互动"
+                f"{connection.get('time_since_interaction', 0):.0f}秒），"
+                f"向会话 {session_id} 发送主动消息"
+            )
+
+            greeting = await self.generate_proactive_greeting(
+                session_id=session_id, life_manager=life_manager
+            )
+            if greeting:
+                from astrbot.api.event import MessageChain, Plain
+
+                chain = MessageChain([Plain(greeting)])
+                try:
+                    sent = await self.context.send_message(session_id, chain)
+                    if sent:
+                        self._last_loneliness_trigger = now_ts
+                        logger.info(f"[孤独感检查] 已发送孤独感问候到 {session_id}")
+                    else:
+                        logger.warning(f"[孤独感检查] 消息未发送到 {session_id}")
+                except Exception as e:
+                    logger.warning(f"[孤独感检查] 发送失败: {e}")
+
+        except Exception as e:
+            logger.error(f"[孤独感检查] 执行失败: {e}")

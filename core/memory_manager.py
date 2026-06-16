@@ -579,3 +579,165 @@ class MemoryManager:
             category = memory.get("category", "general")
             categories[category] = categories.get(category, 0) + 1
         return categories
+
+    # ========== 记忆召回 ==========
+
+    def _load_weighted_conversations(self) -> list[dict[str, Any]]:
+        """Load all non-trivial weighted conversations from disk."""
+        if not self.weighted_conversations_file.exists():
+            return []
+        conversations = []
+        with open(self.weighted_conversations_file, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    conv = json.loads(line)
+                    if not conv.get("is_trivial", False):
+                        conversations.append(conv)
+                except json.JSONDecodeError:
+                    continue
+        return conversations
+
+    @staticmethod
+    def _keyword_match_score(query: str, text: str) -> int:
+        """Simple keyword overlap score between query and text."""
+        if not query or not text:
+            return 0
+        score = 0
+        # Check substrings of length 2+ from the query
+        tokens = [t for t in query.split() if len(t) >= 2]
+        for token in tokens:
+            if token in text:
+                score += 1
+        # Also check 2-char sliding window for Chinese text
+        for i in range(len(query) - 1):
+            chunk = query[i : i + 2]
+            if chunk in text:
+                score += 1
+        return score
+
+    async def recall_relevant(
+        self,
+        query: str,
+        user_id: str = "",
+        limit: int = 5,
+        context=None,
+    ) -> str:
+        """Recall relevant memories using keyword matching + optional LLM filtering.
+
+        Falls back to returning top-scored summaries when LLM is unavailable.
+
+        Args:
+            query: Current user message to match against.
+            user_id: Optional user ID to filter memories.
+            limit: Max number of memories to return.
+            context: Optional AstrBot Context for LLM-based filtering.
+
+        Returns:
+            Formatted memory text suitable for system_prompt injection.
+        """
+        try:
+            conversations = self._load_weighted_conversations()
+            if not conversations:
+                return ""
+
+            # Filter by user_id if provided
+            if user_id:
+                conversations = [
+                    c for c in conversations if c.get("user_id") == user_id
+                ]
+
+            if not conversations:
+                return ""
+
+            # Score each conversation by keyword match * importance * decay
+            scored = []
+            for conv in conversations:
+                combined_text = (
+                    conv.get("user_message", "") + " " + conv.get("bot_response", "")
+                )
+                kw_score = self._keyword_match_score(query, combined_text)
+                if kw_score == 0:
+                    continue
+                importance = conv.get("importance_score", 0.5)
+                decay = conv.get("decay_factor", 1.0)
+                final_score = kw_score * importance * decay
+                scored.append((final_score, conv))
+
+            if not scored:
+                return ""
+
+            # Sort by score descending, take top candidates
+            scored.sort(key=lambda x: x[0], reverse=True)
+            candidates = [conv for _, conv in scored[:10]]
+
+            # If only a few candidates, return them directly
+            if len(candidates) <= limit:
+                return self._format_memories(candidates[:limit])
+
+            # Try LLM-based filtering for better relevance
+            if context:
+                llm_result = await self._llm_filter_memories(
+                    context, query, candidates, limit
+                )
+                if llm_result:
+                    return llm_result
+
+            # Fallback: return top-N by score
+            return self._format_memories(candidates[:limit])
+
+        except Exception as e:
+            logger.debug(f"[记忆召回] recall_relevant 失败: {e}")
+            return ""
+
+    @staticmethod
+    def _format_memories(memories: list[dict[str, Any]]) -> str:
+        """Format a list of memory dicts into a concise text block."""
+        lines = []
+        for m in memories:
+            user_msg = m.get("user_message", "")[:60]
+            timestamp = m.get("date", "")
+            lines.append(f"- [{timestamp}] {user_msg}")
+        return "\n".join(lines) if lines else ""
+
+    async def _llm_filter_memories(
+        self, context, query: str, candidates: list[dict], limit: int
+    ) -> str:
+        """Use LLM to filter and format the most relevant memories.
+
+        Returns empty string if LLM is unavailable or fails.
+        """
+        try:
+            provider = context.get_using_provider()
+            if not provider:
+                return ""
+
+            # Build candidate summaries
+            candidate_texts = []
+            for i, c in enumerate(candidates, 1):
+                user_msg = c.get("user_message", "")[:80]
+                bot_msg = c.get("bot_response", "")[:40]
+                candidate_texts.append(f"{i}. 用户:{user_msg} 回复:{bot_msg}")
+
+            prompt = (
+                f"当前用户消息：{query[:200]}\n\n"
+                f"候选记忆：\n{chr(10).join(candidate_texts)}\n\n"
+                f"请从中选出最相关的{limit}条记忆，"
+                "用简洁的中文列出（每条一行，格式：- [日期] 摘要），"
+                "只输出选中的记忆，不要解释。如果没有相关的，输出'无'。"
+            )
+
+            resp = await provider.text_chat(
+                system_prompt="你是记忆检索助手，擅长找出最相关的记忆。",
+                prompt=prompt,
+            )
+            result = (resp.completion_text or "").strip()
+            if result and result != "无":
+                return result
+            return ""
+
+        except Exception as e:
+            logger.debug(f"[记忆召回] LLM过滤失败: {e}")
+            return ""

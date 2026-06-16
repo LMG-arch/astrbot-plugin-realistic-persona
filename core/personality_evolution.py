@@ -465,18 +465,20 @@ class PersonalityEvolutionManager:
         logger.info("[人格演化] 管理器初始化完成")
 
     def daily_routine(self):
-        """每日例行检查"""
+        """Daily routine check: habit balance, self-consistency, trait pruning."""
         logger.info("[人格演化] 执行每日例行检查")
 
-        # 习惯平衡检查
+        # Habit balance check
         self.habit_balance.daily_check()
 
-        # 自我一致性检查
+        # Self-consistency check: auto-remove extremely underperforming traits
         consistency = self.self_awareness.check_consistency()
-        if consistency.get("underperforming_traits"):
-            logger.warning(
-                f"[人格演化] 发现低表现特质: {consistency['underperforming_traits']}"
-            )
+        underperforming = consistency.get("underperforming_traits")
+        if underperforming:
+            logger.warning(f"[人格演化] 发现低表现特质: {underperforming}")
+            for trait, rate in underperforming.items():
+                if rate < 0.05:
+                    self.self_awareness.remove_trait(trait, f"表现率过低({rate:.1%})")
 
     def process_interaction(self, user_message: str, ai_response: str):
         """处理每次交互，进行学习和记录"""

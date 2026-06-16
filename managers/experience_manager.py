@@ -119,6 +119,14 @@ class ExperienceManager(BaseManager):
                         event_type="conversation",
                     )
 
+            if self.state.personality_evolution:
+                try:
+                    self.state.personality_evolution.process_interaction(
+                        user_message, ""
+                    )
+                except Exception as e:
+                    logger.debug(f"[人格演化] process_interaction 失败: {e}")
+
             logger.debug(f"用户交互已记录: {session_id}")
 
         except Exception as e:

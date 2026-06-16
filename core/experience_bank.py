@@ -475,17 +475,30 @@ class ExperienceBank:
         return [skill[0] for skill in sorted_skills[:5]]
 
     def get_growth_summary(self) -> dict[str, Any]:
-        """获取成长摘要"""
+        """获取成长摘要
+
+        Returns both raw collections (skills/interests/views) for direct
+        consumption and aggregate counts (skills_count/etc.) for status views.
+        """
         try:
             with open(self.growth_file, encoding="utf-8") as f:
                 growth_data = json.load(f)
 
+            skills = growth_data.get("skills", {})
+            interests = growth_data.get("interests", [])
+            views = growth_data.get("views", [])
+
             return {
-                "skills_count": len(growth_data.get("skills", {})),
-                "interests_count": len(growth_data.get("interests", [])),
-                "views_count": len(growth_data.get("views", [])),
-                "top_skills": self._get_top_skills(growth_data.get("skills", {})),
-                "recent_interests": growth_data.get("interests", [])[-5:],
+                # Raw collections for direct consumption (skills/interests/views)
+                "skills": skills,
+                "interests": interests,
+                "views": views,
+                # Aggregate stats for status/summary views
+                "skills_count": len(skills),
+                "interests_count": len(interests),
+                "views_count": len(views),
+                "top_skills": self._get_top_skills(skills),
+                "recent_interests": interests[-5:],
                 "updated_at": growth_data.get("updated_at"),
             }
 
@@ -1147,3 +1160,166 @@ class ExperienceBank:
         except Exception as e:
             logger.error(f"[经历银行] 分析成长平滑性失败: {e}")
             return {}
+
+    # ========== 沉睡数据读取方法 ==========
+
+    def get_recent_projects(
+        self, status: str | None = None, limit: int = 5
+    ) -> list[dict[str, Any]]:
+        """Read recent project records, optionally filtered by status.
+
+        Args:
+            status: Filter by status (in_progress/completed/paused). None = all.
+            limit: Max number of records to return.
+
+        Returns:
+            List of project dicts, most recent first.
+        """
+        try:
+            if not self.projects_file.exists():
+                return []
+
+            projects = []
+            with open(self.projects_file, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        projects.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+
+            if status:
+                projects = [p for p in projects if p.get("status") == status]
+
+            projects.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+            return projects[:limit]
+
+        except Exception as e:
+            logger.debug(f"[经历银行] 读取项目失败: {e}")
+            return []
+
+    def get_pending_promises(self, limit: int = 5) -> list[dict[str, Any]]:
+        """Read unfulfilled promises.
+
+        Args:
+            limit: Max number of promises to return.
+
+        Returns:
+            List of pending promise dicts, most recent first.
+        """
+        try:
+            if not self.promises_file.exists():
+                return []
+
+            promises = []
+            with open(self.promises_file, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        promises.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+
+            pending = [p for p in promises if p.get("status") == "pending"]
+            pending.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+            return pending[:limit]
+
+        except Exception as e:
+            logger.debug(f"[经历银行] 读取承诺失败: {e}")
+            return []
+
+    def get_recent_circadian(self, days: int = 1) -> dict[str, Any] | None:
+        """Get the most recent circadian state record.
+
+        Args:
+            days: Look back this many days for the latest record.
+
+        Returns:
+            Latest circadian state dict, or None if no records.
+        """
+        try:
+            if not self.circadian_file.exists():
+                return None
+
+            records = []
+            with open(self.circadian_file, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        records.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+
+            if not records:
+                return None
+
+            records.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+            return records[0] if records else None
+
+        except Exception as e:
+            logger.debug(f"[经历银行] 读取生物钟失败: {e}")
+            return None
+
+    def get_relationship_profile(self, user_id: str) -> dict[str, Any] | None:
+        """Get relationship profile for a specific user.
+
+        Args:
+            user_id: The user identifier to look up.
+
+        Returns:
+            Dict with interaction_count, last_interaction, milestones_count,
+            and relationship_characteristics, or None if no data.
+        """
+        try:
+            if not self.relationships_file.exists():
+                return None
+
+            with open(self.relationships_file, encoding="utf-8") as f:
+                relationships = json.load(f)
+
+            rel = relationships.get(user_id)
+            if not rel:
+                return None
+
+            interaction_count = rel.get("interaction_count", 0)
+            last_interaction = rel.get("last_interaction", "")
+
+            # Extract milestone count
+            milestones = rel.get("milestones", [])
+            milestone_count = len(milestones) if isinstance(milestones, list) else 0
+
+            # Determine relationship characteristics from interaction patterns
+            characteristics = []
+            if interaction_count > 50:
+                characteristics.append("互动频繁")
+            elif interaction_count > 20:
+                characteristics.append("较为熟悉")
+            elif interaction_count > 5:
+                characteristics.append("初步了解")
+            else:
+                characteristics.append("刚认识")
+
+            # Check for deep conversations in milestones
+            if isinstance(milestones, list):
+                deep_count = sum(
+                    1 for m in milestones if m.get("type") == "deep_conversation"
+                )
+                if deep_count > 2:
+                    characteristics.append("有过深入交流")
+
+            return {
+                "interaction_count": interaction_count,
+                "last_interaction": last_interaction,
+                "milestones_count": milestone_count,
+                "relationship_characteristics": "、".join(characteristics),
+            }
+
+        except Exception as e:
+            logger.debug(f"[经历银行] 读取关系画像失败: {e}")
+            return None

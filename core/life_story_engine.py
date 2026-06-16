@@ -286,26 +286,28 @@ class LifeStoryEngine:
             logger.error(f"[人生故事引擎] 收集经历失败: {e}", exc_info=True)
             return data
 
-    async def update_life_story(self, llm_action) -> bool:
-        """更新人生故事（补充经历线）
+    async def update_life_story(self, llm_action=None, context=None) -> bool:
+        """Update life story by collecting recent experiences and generating a new chapter.
 
         Args:
-            llm_action: LLMAction 实例，用于获取实际的LLM提供者
+            llm_action: Optional LLMAction instance (legacy path, uses its .context).
+            context: Optional AstrBot Context to obtain LLM provider directly,
+                     preferred over llm_action so the engine works without QQ zone.
 
         Returns:
-            是否更新成功
+            Whether the update succeeded.
         """
         try:
             logger.info("[人生故事引擎] 开始更新人生经历线...")
 
-            # 从LLMAction获取实际的LLM提供者
-            if hasattr(llm_action, "context"):
+            # Obtain LLM provider: prefer context, fall back to llm_action
+            provider = None
+            if context:
+                provider = context.get_using_provider()
+            if not provider and llm_action and hasattr(llm_action, "context"):
                 provider = llm_action.context.get_using_provider()
-                if not provider:
-                    logger.error("[人生故事引擎] 无法获取LLM提供者")
-                    return False
-            else:
-                logger.error("[人生故事引擎] LLMAction对象无效")
+            if not provider:
+                logger.error("[人生故事引擎] 无法获取LLM提供者")
                 return False
 
             # 收集最近的经历
@@ -336,7 +338,7 @@ class LifeStoryEngine:
                 self._save_state()
 
                 # 重新生成上下文缓存
-                await self._regenerate_context_cache(llm_action)
+                await self._regenerate_context_cache(llm_action, context)
 
                 logger.info(
                     f"[人生故事引擎] 人生经历线已更新到第 {self.state['current_chapter']} 章"
@@ -451,19 +453,24 @@ class LifeStoryEngine:
         except Exception as e:
             logger.error(f"[人生故事引擎] 整合故事更新失败: {e}")
 
-    async def _regenerate_context_cache(self, llm_action):
-        """重新生成上下文缓存（最精简版本）"""
+    async def _regenerate_context_cache(self, llm_action=None, context=None):
+        """Regenerate the compact context cache using LLM compression.
+
+        Args:
+            llm_action: Optional LLMAction instance (legacy path).
+            context: Optional AstrBot Context, preferred over llm_action.
+        """
         try:
             logger.info("[人生故事引擎] 正在生成精简上下文...")
 
-            # 从LLMAction获取实际的LLM提供者
-            if hasattr(llm_action, "context"):
+            # Obtain LLM provider: prefer context, fall back to llm_action
+            provider = None
+            if context:
+                provider = context.get_using_provider()
+            if not provider and llm_action and hasattr(llm_action, "context"):
                 provider = llm_action.context.get_using_provider()
-                if not provider:
-                    logger.error("[人生故事引擎] 无法获取LLM提供者用于生成上下文缓存")
-                    return
-            else:
-                logger.error("[人生故事引擎] LLMAction对象无效")
+            if not provider:
+                logger.error("[人生故事引擎] 无法获取LLM提供者用于生成上下文缓存")
                 return
 
             # 构建精简提示词
@@ -563,9 +570,6 @@ class LifeStoryEngine:
             f"- 关键经历数：{total_events}\n"
             f"- 上次更新：{datetime.fromtimestamp(self.state.get('last_update_time', 0)).strftime('%Y-%m-%d %H:%M') if self.state.get('last_update_time') else '未更新'}"
         )
-        base_persona = self.state.get("base_persona", "")
-        logger.debug("[人生故事引擎] 缓存失效，使用基础人设")
-        return base_persona
 
     def get_summary(self) -> str:
         """获取引擎状态摘要"""

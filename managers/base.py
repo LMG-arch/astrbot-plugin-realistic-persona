@@ -168,6 +168,7 @@ class SharedState:
         self.auto_publish = None
         self._proactive_share_scheduler = None
         self._comment_check_scheduler = None
+        self._loneliness_scheduler = None
 
     def initialize_sub_modules(self):
         """Initialize all sub-modules (called from Main.__init__ after SharedState creation)."""

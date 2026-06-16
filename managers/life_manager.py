@@ -68,6 +68,43 @@ class LifeManager(BaseManager):
                 except Exception as e:
                     logger.debug(f"获取最近思考/活动失败: {e}")
 
+            # Inject dormant data from experience bank
+            if self.state.experience_bank:
+                try:
+                    projects = self.state.experience_bank.get_recent_projects(
+                        status="in_progress", limit=3
+                    )
+                    if projects:
+                        proj_names = [
+                            p.get("project_name", "")
+                            for p in projects
+                            if p.get("project_name")
+                        ]
+                        if proj_names:
+                            context_parts.append(
+                                f"正在进行的事：{', '.join(proj_names)}"
+                            )
+
+                    promises = self.state.experience_bank.get_pending_promises(limit=3)
+                    if promises:
+                        promise_texts = [
+                            p.get("promise", "")[:30]
+                            for p in promises
+                            if p.get("promise")
+                        ]
+                        if promise_texts:
+                            context_parts.append(
+                                f"答应过的事：{'; '.join(promise_texts)}"
+                            )
+
+                    circadian = self.state.experience_bank.get_recent_circadian()
+                    if circadian:
+                        energy = circadian.get("energy_level", 5)
+                        mood = circadian.get("mood", "中性")
+                        context_parts.append(f"当前状态：精力{energy}/10，心情-{mood}")
+                except Exception as e:
+                    logger.debug(f"注入沉睡数据失败: {e}")
+
             return "\n".join(context_parts) if context_parts else ""
         except Exception as e:
             logger.error(f"构建生活上下文失败: {e}")
