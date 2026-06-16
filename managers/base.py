@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 from astrbot.api import logger
@@ -119,12 +120,15 @@ class SharedState:
         self.activity_interval_minutes = config.get("activity_interval_minutes", 25)
 
         # ========== State management ==========
-        # NOTE: These mutable fields are shared across managers and may be
-        # accessed concurrently from different async tasks.  There is no
-        # synchronization (e.g. asyncio.Lock) protecting them.  If the
-        # plugin is ever used with true concurrency (e.g. multiple event
-        # loop threads), consider adding locks or using thread-safe data
-        # structures to prevent data races.
+        # These mutable fields are shared across managers and may be
+        # accessed concurrently from different async tasks.  Locks are
+        # provided for safe read-modify-write operations.
+        self._emotion_lock = asyncio.Lock()
+        self._favorability_lock = asyncio.Lock()
+        self._tasks_lock = asyncio.Lock()
+        self._events_lock = asyncio.Lock()
+        self._life_state_lock = asyncio.Lock()
+
         self.emotion_contexts: dict[str, EmotionContext] = {}
         self.event_trigger = EventTrigger()
         self.proactive_manager = ProactiveMessageManager()
@@ -290,6 +294,58 @@ class SharedState:
                 f"异步思考调度器已初始化（思考间隔: {self.think_interval_minutes}分钟, "
                 f"活动间隔: {self.activity_interval_minutes}分钟）"
             )
+
+    # ========== Thread-safe accessors for shared mutable state ==========
+
+    async def get_or_create_emotion_context(self, session_id: str) -> EmotionContext:
+        """Get or create an EmotionContext for the given session (lock-protected)."""
+        async with self._emotion_lock:
+            if session_id not in self.emotion_contexts:
+                self.emotion_contexts[session_id] = EmotionContext()
+            return self.emotion_contexts[session_id]
+
+    async def update_favorability_safe(self, session_id: str, delta: float) -> float:
+        """Add delta to favorability for session, clamped to [0, 100]. Returns new value."""
+        async with self._favorability_lock:
+            current = self.favorability.get(session_id, 0.0)
+            new_val = max(0.0, min(100.0, current + delta))
+            self.favorability[session_id] = new_val
+            return new_val
+
+    async def get_current_event_safe(self, session_id: str):
+        """Get the current event for a session (lock-protected read)."""
+        async with self._events_lock:
+            return self._current_events.get(session_id)
+
+    async def set_current_event_safe(self, session_id: str, event):
+        """Set the current event for a session (lock-protected write)."""
+        async with self._events_lock:
+            self._current_events[session_id] = event
+
+    async def clear_current_event_safe(self, session_id: str):
+        """Clear the current event for a session (lock-protected delete)."""
+        async with self._events_lock:
+            self._current_events.pop(session_id, None)
+
+    async def add_background_task_safe(self, task):
+        """Add a task to the background tasks set (lock-protected)."""
+        async with self._tasks_lock:
+            self._background_tasks.add(task)
+
+    async def discard_background_task_safe(self, task):
+        """Remove a task from the background tasks set (lock-protected)."""
+        async with self._tasks_lock:
+            self._background_tasks.discard(task)
+
+    async def update_life_state_safe(self, session_id: str, data: dict):
+        """Update life state for a session (lock-protected write)."""
+        async with self._life_state_lock:
+            self.life_state[session_id] = data
+
+    async def get_life_state_safe(self, session_id: str) -> dict | None:
+        """Get life state for a session (lock-protected read)."""
+        async with self._life_state_lock:
+            return self.life_state.get(session_id)
 
     def get_provider_id(self) -> str | None:
         """Get the current LLM provider ID."""

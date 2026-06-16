@@ -71,18 +71,20 @@ class TestEmotionManager:
             mock_vc.compare_version.return_value = True
             return SharedState(mock_context, mock_config)
 
-    def test_get_context_creates_new(self, mock_config, mock_context):
+    @pytest.mark.asyncio
+    async def test_get_context_creates_new(self, mock_config, mock_context):
         state = self._make_state(mock_config, mock_context)
         manager = EmotionManager(state)
-        ctx = manager.get_context("session1")
+        ctx = await manager.get_context("session1")
         assert ctx is not None
         assert "session1" in state.emotion_contexts
 
-    def test_get_context_returns_existing(self, mock_config, mock_context):
+    @pytest.mark.asyncio
+    async def test_get_context_returns_existing(self, mock_config, mock_context):
         state = self._make_state(mock_config, mock_context)
         manager = EmotionManager(state)
-        ctx1 = manager.get_context("session1")
-        ctx2 = manager.get_context("session1")
+        ctx1 = await manager.get_context("session1")
+        ctx2 = await manager.get_context("session1")
         assert ctx1 is ctx2
 
     @pytest.mark.asyncio
@@ -111,7 +113,8 @@ class TestEmotionManager:
         result = await manager.process_emotion_and_events(mock_event)
         assert result["emotion"] is None
 
-    def test_update_favorability_bounded(self, mock_config, mock_context):
+    @pytest.mark.asyncio
+    async def test_update_favorability_bounded(self, mock_config, mock_context):
         state = self._make_state(mock_config, mock_context)
         manager = EmotionManager(state)
         state.favorability["session1"] = 99.0
@@ -120,10 +123,11 @@ class TestEmotionManager:
         mock_event.get_session_id.return_value = "session1"
         mock_event.message_obj.message_str = ""
 
-        manager.update_favorability(mock_event)
+        await manager.update_favorability(mock_event)
         assert state.favorability["session1"] <= 100.0
 
-    def test_update_favorability_min_zero(self, mock_config, mock_context):
+    @pytest.mark.asyncio
+    async def test_update_favorability_min_zero(self, mock_config, mock_context):
         state = self._make_state(mock_config, mock_context)
         manager = EmotionManager(state)
         state.favorability["session1"] = 0.1
@@ -132,12 +136,13 @@ class TestEmotionManager:
         mock_event.get_session_id.return_value = "session1"
         mock_event.message_obj.message_str = ""
 
-        manager.update_favorability(mock_event)
+        await manager.update_favorability(mock_event)
         assert state.favorability["session1"] >= 0.0
 
-    def test_get_status_returns_string(self, mock_config, mock_context):
+    @pytest.mark.asyncio
+    async def test_get_status_returns_string(self, mock_config, mock_context):
         state = self._make_state(mock_config, mock_context)
         manager = EmotionManager(state)
-        status = manager.get_status("session1")
+        status = await manager.get_status("session1")
         assert isinstance(status, str)
         assert "暂无情绪数据" in status

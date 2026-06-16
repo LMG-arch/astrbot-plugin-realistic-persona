@@ -22,9 +22,6 @@ from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
 )
-from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_platform_adapter import (
-    AiocqhttpAdapter,
-)
 
 try:
     import pillowmd
@@ -35,17 +32,18 @@ except ImportError:
     logger.warning("pillowmd 未安装，部分渲染功能将不可用")
 
 try:
-    from .core.llm_action import LLMAction
-    from .core.operate import PostOperator
-    from .core.qzone_api import Qzone
-    from .core.scheduler import AutoPublish  # noqa: F401
-    from .core.utils import get_image_urls  # noqa: F401
-
-    QZONE_AVAILABLE = True
+    from .core.qzone_initializer import (
+        QZONE_AVAILABLE,
+        initialize_qzone,
+        wait_for_qzone_ws,
+    )
 except ImportError as e:
     QZONE_AVAILABLE = False
+    initialize_qzone = None
+    wait_for_qzone_ws = None
     logger.warning(f"QQ空间模块未完全加载: {e}")
 
+from .core.monkey_patches import apply_toolset_patch
 from .core.utils import stable_hash
 from .managers import (
     EmotionManager,
@@ -57,94 +55,6 @@ from .managers import (
     SharedState,
     ThinkingManager,
 )
-
-
-class ThinkingLLM:
-    """轻量级LLM助手，用于异步思考和活动生成，不依赖QQ平台"""
-
-    def __init__(self, context, provider_id: str = "", persona_profile: str = ""):
-        self.context = context
-        self.provider_id = provider_id
-        self.persona_profile = persona_profile
-
-    def _get_provider(self):
-        provider = None
-        if self.provider_id:
-            provider = self.context.get_provider_by_id(self.provider_id)
-        if not provider:
-            provider = self.context.get_using_provider()
-        return provider
-
-    def _build_system_prompt(self, mode: str = "thought") -> str:
-        persona = self.persona_profile.strip()
-        persona_clause = f"你就是这个人：{persona}\n" if persona else ""
-        if mode == "thought":
-            return (
-                f"{persona_clause}"
-                "请完全以角色的身份进行内心独白。要求：\n"
-                "1. 真实自然，像真人内心独白，有具体的情绪和感受\n"
-                "2. 长度15-50字\n"
-                "3. 必须结合给定的真实情境（日程、天气、最近聊天、经历）来思考\n"
-                "4. 不要泛泛的感叹（如'又度过充实的一天'），要对具体事情有感受\n"
-                "5. 符合你的人设特点，有个人情感色彩\n"
-                "6. 直接返回思考内容，不要添加解释或引号"
-            )
-        else:
-            return (
-                f"{persona_clause}"
-                "请完全以角色的身份描述此刻正在做的一件日常小事。要求：\n"
-                "1. 真实自然，贴近生活，有具体动作和细节\n"
-                "2. 长度10-30字\n"
-                "3. 结合给定的日程、天气、时间段来描述\n"
-                "4. 不要重复之前做过的事\n"
-                "5. 直接返回活动内容，不要添加解释或引号"
-            )
-
-    async def generate_thought(self, prompt: str) -> str | None:
-        provider = self._get_provider()
-        if not provider:
-            logger.warning("[思考LLM] 未配置LLM提供商，无法生成思考")
-            return None
-        try:
-            resp = await provider.text_chat(
-                system_prompt=self._build_system_prompt("thought"),
-                prompt=prompt,
-            )
-            text = (resp.completion_text or "").strip()
-            if not text:
-                logger.warning("[思考LLM] LLM返回空内容")
-                return None
-            text = text.split("\n")[0].strip()
-            if text.startswith('"') and text.endswith('"'):
-                text = text[1:-1]
-            if text.startswith("「") and text.endswith("」"):
-                text = text[1:-1]
-            return text if text else None
-        except Exception as e:
-            logger.error(f"[思考LLM] 生成思考失败: {e}")
-            return None
-
-    async def generate_activity(self, prompt: str) -> str | None:
-        provider = self._get_provider()
-        if not provider:
-            logger.warning("[思考LLM] 未配置LLM提供商，无法生成活动")
-            return None
-        try:
-            resp = await provider.text_chat(
-                system_prompt=self._build_system_prompt("activity"),
-                prompt=prompt,
-            )
-            text = (resp.completion_text or "").strip()
-            if not text:
-                logger.warning("[思考LLM] LLM返回空内容")
-                return None
-            text = text.split("\n")[0].strip()
-            if text.startswith('"') and text.endswith('"'):
-                text = text[1:-1]
-            return text if text else None
-        except Exception as e:
-            logger.error(f"[思考LLM] 生成活动失败: {e}")
-            return None
 
 
 @register(
@@ -206,44 +116,12 @@ class Main(Star):
         )
         self.state.cache.mkdir(parents=True, exist_ok=True)
 
-    @staticmethod
-    def _patch_toolset_openai_schema():
-        from astrbot.core.agent.tool import ToolSet
-
-        logger.warning(
-            "[MonkeyPatch] 正在替换 ToolSet.openai_schema 以修复 description=None 导致的400错误。"
-            "此补丁在AstrBot核心更新后可能失效，请关注插件更新。"
-        )
-
-        _original = ToolSet.openai_schema
-
-        def _fixed_openai_schema(self, omit_empty_parameter_field=False):
-            result = []
-            for tool in self.tools:
-                func_def = {
-                    "type": "function",
-                    "function": {
-                        "name": tool.name,
-                        "description": tool.description or tool.name,
-                    },
-                }
-                if tool.parameters is not None:
-                    if (
-                        tool.parameters and tool.parameters.get("properties")
-                    ) or not omit_empty_parameter_field:
-                        func_def["function"]["parameters"] = tool.parameters
-                result.append(func_def)
-            return result
-
-        ToolSet.openai_schema = _fixed_openai_schema
-        logger.info("[补丁] 已修复 ToolSet.openai_schema (description=None 400错误)")
-
     async def initialize(self):
         try:
             logger.info("拟人化角色行为系统插件正在加载...")
 
             try:
-                self._patch_toolset_openai_schema()
+                apply_toolset_patch()
             except Exception as e:
                 logger.warning(f"[补丁] ToolSet补丁应用失败: {e}")
 
@@ -325,7 +203,7 @@ class Main(Star):
                             self.proactive_mgr.send_proactive_message
                         )
                     )
-                    self.state._background_tasks.add(task)
+                    await self.state.add_background_task_safe(task)
                     task.add_done_callback(self.state._background_tasks.discard)
                     logger.info(
                         f"主动消息功能已启动，空闲延迟: {self.state.idle_greeting_delay}秒"
@@ -412,10 +290,8 @@ class Main(Star):
                     except Exception as e:
                         logger.error(f"无法加载pillowmd样式：{e}")
 
-                task = asyncio.create_task(
-                    self.initialize_qzone(wait_ws_connected=False)
-                )
-                self.state._background_tasks.add(task)
+                task = asyncio.create_task(initialize_qzone(self.state, self.context))
+                await self.state.add_background_task_safe(task)
                 task.add_done_callback(self.state._background_tasks.discard)
 
             self._print_plugin_status()
@@ -539,175 +415,12 @@ class Main(Star):
     @filter.on_platform_loaded()
     async def on_platform_loaded(self):
         if self.state.enable_qzone and QZONE_AVAILABLE:
-            task = asyncio.create_task(self.initialize_qzone(wait_ws_connected=True))
-            self.state._background_tasks.add(task)
+            # Wait for WebSocket, then initialize Qzone
+            if wait_for_qzone_ws is not None:
+                await wait_for_qzone_ws(self.state, self.context)
+            task = asyncio.create_task(initialize_qzone(self.state, self.context))
+            await self.state.add_background_task_safe(task)
             task.add_done_callback(self.state._background_tasks.discard)
-
-    async def initialize_qzone(self, wait_ws_connected: bool = False):
-        if self.state._qzone_initialized:
-            logger.debug("[QQ空间] 已初始化，跳过重复调用")
-            return
-        self.state._qzone_initialized = True
-
-        logger.info(f"[QQ空间] 开始初始化, wait_ws_connected={wait_ws_connected}")
-
-        if not QZONE_AVAILABLE:
-            logger.warning("[QQ空间] QZONE_AVAILABLE=False, 模块不可用")
-            return
-
-        logger.info("[QQ空间] 查找 aiocqhttp 客户端...")
-        client = None
-        for inst in self.context.platform_manager.platform_insts:
-            if isinstance(inst, AiocqhttpAdapter):
-                if client := inst.get_client():
-                    logger.info(
-                        f"[QQ空间] 找到 aiocqhttp 客户端: {type(inst).__name__}"
-                    )
-                    break
-        if not client:
-            logger.warning("[QQ空间] 未找到 aiocqhttp 客户端，初始化终止")
-            return
-
-        if wait_ws_connected:
-            ws_connected = asyncio.Event()
-
-            @client.on_websocket_connection
-            def _(_):
-                ws_connected.set()
-
-            try:
-                await asyncio.wait_for(ws_connected.wait(), timeout=10)
-            except asyncio.TimeoutError:
-                logger.warning("等待 aiocqhttp WebSocket 连接超时")
-
-        logger.info("[QQ空间] 创建Qzone对象...")
-        self.state.qzone = Qzone(client)
-        logger.info("[QQ空间] Qzone对象创建完成")
-
-        logger.info("[QQ空间] 登录QQ空间...")
-        await self.state.qzone.ready()
-        if not self.state.qzone.ctx:
-            logger.warning("[QQ空间] 登录失败，ctx未初始化，部分功能可能不可用")
-        else:
-            logger.info(f"[QQ空间] 登录成功，uin={self.state.qzone.ctx.uin}")
-
-        logger.info("[QQ空间] 创建LLMAction对象...")
-        self.state.llm = LLMAction(self.context, self.state.config, client)
-        self.state.llm.experience_bank = self.state.experience_bank
-        self.state.llm.personality_evolution = self.state.personality_evolution
-        logger.info("[QQ空间] LLMAction对象创建完成")
-
-        enable_qzone = self.state.config.get("enable_qzone", False)
-        publish_times = self.state.config.get("publish_times_per_day", 0)
-        insomnia_prob = self.state.config.get("insomnia_probability", 0)
-        logger.info(
-            f"[QQ空间] 配置: enable_qzone={enable_qzone}, publish_times_per_day={publish_times}, insomnia_probability={insomnia_prob}"
-        )
-
-        logger.info("[QQ空间] 创建PostOperator...")
-        from .core.post import PostDB
-
-        db_path = (
-            StarTools.get_data_dir("astrbot_plugin_realistic_persona") / "posts.db"
-        )
-        self.state.post_db = PostDB(db_path)
-        await self.state.post_db.initialize()
-        logger.info(f"[QQ空间] 数据库已初始化: {db_path}")
-
-        self.state.operator = PostOperator(
-            self.context,
-            self.state.config,
-            self.state.qzone,
-            self.state.post_db,
-            self.state.llm,
-            self.state.style,
-            self.state.local_data_manager,
-        )
-        logger.info("[QQ空间] PostOperator创建完成")
-
-        self.state._comment_check_scheduler = None
-        if self.state.config.get("enable_qzone") and (
-            self.state.config.get("publish_times_per_day", 0) > 0
-            or self.state.config.get("insomnia_probability", 0) > 0
-        ):
-            logger.info("[QQ空间] 创建AutoPublish...")
-            from .core.scheduler import AutoPublish
-
-            self.state.auto_publish = AutoPublish(
-                self.context, self.state.config, self.state.operator
-            )
-            await self.state.auto_publish.start()
-            logger.info("[QQ空间] AutoPublish创建完成")
-        else:
-            logger.info(
-                "[QQ空间] 未启用自动发说说（enable_qzone=False 或 publish_times_per_day=0 且 insomnia_probability=0）"
-            )
-            if self.state.config.get("enable_qzone") and self.state.config.get(
-                "enable_auto_reply_comments", True
-            ):
-                self._start_standalone_comment_check()
-
-        logger.info("[QQ空间] 初始化完成！")
-        logger.info(
-            f"[QQ空间] 组件状态: qzone={'OK' if self.state.qzone is not None else 'MISSING'}, "
-            f"llm={'OK' if self.state.llm is not None else 'MISSING'}, "
-            f"operator={'OK' if self.state.operator is not None else 'MISSING'}"
-        )
-
-        # Now that llm_action is available, bind it to the thinking scheduler
-        if (
-            self.state.enable_async_thinking
-            and self.state.async_thinking_scheduler
-            and self.state.llm
-        ):
-            self.state.async_thinking_scheduler.llm_action = self.state.llm
-            logger.debug("[QQ空间] 已将 llm_action 绑定到异步思考调度器")
-
-    def _start_standalone_comment_check(self):
-        try:
-            import zoneinfo
-
-            from apscheduler.schedulers.asyncio import AsyncIOScheduler
-            from apscheduler.triggers.interval import IntervalTrigger
-
-            tz = self.context.get_config().get("timezone")
-            timezone = (
-                zoneinfo.ZoneInfo(tz) if tz else zoneinfo.ZoneInfo("Asia/Shanghai")
-            )
-
-            self.state._comment_check_scheduler = AsyncIOScheduler(timezone=timezone)
-            interval_minutes = self.state.config.get(
-                "qzone_comment_check_interval_minutes", 60
-            )
-            self.state._comment_check_scheduler.add_job(
-                func=self._standalone_check_and_reply_comments,
-                trigger=IntervalTrigger(minutes=interval_minutes, timezone=timezone),
-                name="standalone_comment_checker",
-                max_instances=1,
-            )
-            self.state._comment_check_scheduler.start()
-            logger.info(
-                f"[QQ空间][独立评论检查] 已启动，每{interval_minutes}分钟检查一次"
-            )
-        except Exception as e:
-            logger.error(f"[QQ空间][独立评论检查] 启动失败: {e}")
-
-    async def _standalone_check_and_reply_comments(self):
-        try:
-            if self.state.operator is None:
-                logger.debug("[独立评论检查] operator 未初始化，跳过")
-                return
-            if self.state.operator.qzone is None:
-                logger.debug("[独立评论检查] operator.qzone 未初始化，跳过")
-                return
-            if self.state.operator.qzone.ctx is None:
-                logger.debug("[独立评论检查] operator.qzone.ctx 未初始化，跳过")
-                return
-            logger.debug("[独立评论检查] 开始检查新评论并回复")
-            await self.state.operator.auto_reply_to_comments()
-            logger.debug("[独立评论检查] 评论检查和回复完成")
-        except Exception as e:
-            logger.error(f"[独立评论检查] 检查和回复评论失败: {e}")
 
     def _register_event_handlers(self):
         from .context_events import EventType
@@ -810,7 +523,7 @@ class Main(Star):
                     task = asyncio.create_task(
                         self.thinking_manager.update_life_story_async()
                     )
-                    self.state._background_tasks.add(task)
+                    await self.state.add_background_task_safe(task)
                     task.add_done_callback(self.state._background_tasks.discard)
                     logger.info("[人生故事] 后台更新经历线已触发")
 
@@ -1543,7 +1256,7 @@ class Main(Star):
                                 event=event, emotion=bot_emotion, intensity=intensity
                             )
                         )
-                        self.state._background_tasks.add(task)
+                        await self.state.add_background_task_safe(task)
                         task.add_done_callback(self.state._background_tasks.discard)
             except Exception as e:
                 logger.debug(f"[Profile更新] 角色情绪分析失败: {e}")

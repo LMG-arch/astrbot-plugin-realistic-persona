@@ -10,11 +10,9 @@ from .base import BaseManager
 class EmotionManager(BaseManager):
     """Manages emotion detection, context tracking, and favorability."""
 
-    def get_context(self, session_id: str) -> EmotionContext:
-        """Get or create emotion context for a session."""
-        if session_id not in self.state.emotion_contexts:
-            self.state.emotion_contexts[session_id] = EmotionContext()
-        return self.state.emotion_contexts[session_id]
+    async def get_context(self, session_id: str) -> EmotionContext:
+        """Get or create emotion context for a session (lock-protected)."""
+        return await self.state.get_or_create_emotion_context(session_id)
 
     async def process_emotion_and_events(self, event: AstrMessageEvent) -> dict | None:
         """Process emotion analysis and event detection."""
@@ -31,12 +29,12 @@ class EmotionManager(BaseManager):
         if self.state.enable_emotion_detection:
             logger.debug("情绪检测已启用，开始分析...")
             emotion = EmotionAnalyzer.analyze_emotion(message)
-            self.update_favorability(event, emotion=emotion)
+            await self.update_favorability(event, emotion=emotion)
             if emotion:
                 result["emotion"] = emotion
                 logger.info(f"检测到情绪: {emotion.value} 在会话 {session_id}")
 
-                emotion_context = self.get_context(session_id)
+                emotion_context = await self.get_context(session_id)
                 emotion_context.add_emotion(emotion, message, time.time())
 
                 if self.state.enable_auto_selfie:
@@ -76,7 +74,7 @@ class EmotionManager(BaseManager):
         )
         return result
 
-    def update_favorability(self, event: AstrMessageEvent, emotion=None) -> None:
+    async def update_favorability(self, event: AstrMessageEvent, emotion=None) -> None:
         """Accumulate favorability based on session activity, bounded to [0, 100]."""
         try:
             session_id = event.get_session_id()
@@ -89,12 +87,11 @@ class EmotionManager(BaseManager):
             delta = EMOTION_INTENSITY_MAP.get(emotion, 0.3) * 2.0
         else:
             delta = 0.5
-        current = self.state.favorability.get(session_id, 0.0)
-        self.state.favorability[session_id] = max(0.0, min(100.0, current + delta))
+        await self.state.update_favorability_safe(session_id, delta)
 
-    def get_status(self, session_id: str) -> str:
+    async def get_status(self, session_id: str) -> str:
         """Get emotion status for a session."""
-        emotion_context = self.get_context(session_id)
+        emotion_context = await self.get_context(session_id)
         recent_emotion = emotion_context.get_recent_emotion()
         trend = emotion_context.get_emotion_trend()
 

@@ -55,6 +55,13 @@ class ExperienceBank:
         # File lock for concurrent read-modify-write operations
         self._file_lock = asyncio.Lock()
 
+        # JSONL rotation: max lines before truncation (0 = unlimited)
+        self._max_conversation_lines: int = 5000
+        self._max_event_lines: int = 5000
+        # Check rotation every N records (avoid checking on every single append)
+        self._rotation_check_counter: int = 0
+        self._rotation_check_interval: int = 100
+
         # 初始化时间线验证器
         self.timeline_verifier = None
         if enable_timeline_verification and TIMELINE_AVAILABLE:
@@ -135,6 +142,11 @@ class ExperienceBank:
 
             logger.info(f"[经历银行] 对话已记录: 用户 {user_id}")
 
+            # Periodic rotation check
+            self._maybe_rotate_jsonl(
+                self.conversations_file, self._max_conversation_lines
+            )
+
         except Exception as e:
             logger.error(f"[经历银行] 记录对话失败: {e}")
 
@@ -170,25 +182,33 @@ class ExperienceBank:
 
             logger.info(f"[经历银行] 事件已记录: {event_type}")
 
+            # Periodic rotation check
+            self._maybe_rotate_jsonl(self.events_file, self._max_event_lines)
+
         except Exception as e:
             logger.error(f"[经历银行] 记录事件失败: {e}")
 
     def get_recent_conversations(
         self, session_id: str | None = None, limit: int = 5
     ) -> list[dict]:
-        """获取最近的对话记录
+        """Get recent conversation records (tail-optimized).
+
+        Reads from the end of the file using a deque with maxlen to cap
+        memory usage, avoiding loading the entire file into RAM.
 
         Args:
-            session_id: 会话ID，为 None 时不限制会话
-            limit: 返回的最大记录数
+            session_id: Filter by session ID, or None for all sessions.
+            limit: Maximum number of records to return.
 
         Returns:
-            对话记录列表（时间倒序）
+            List of conversation dicts, most recent first.
         """
         try:
             if not self.conversations_file.exists():
                 return []
-            lines = []
+            from collections import deque
+
+            results: deque = deque(maxlen=limit * 3 if session_id else limit)
             with open(self.conversations_file, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
@@ -198,11 +218,13 @@ class ExperienceBank:
                         record = json.loads(line)
                         if session_id and record.get("session_id") != session_id:
                             continue
-                        lines.append(record)
+                        results.append(record)
                     except json.JSONDecodeError:
                         continue
             # Return most recent first
-            return lines[-limit:][::-1]
+            items = list(results)
+            items.reverse()
+            return items[:limit]
         except Exception as e:
             logger.error(f"[经历银行] 获取最近对话失败: {e}")
             return []
@@ -210,19 +232,21 @@ class ExperienceBank:
     def get_recent_events(
         self, event_type: str | None = None, limit: int = 5
     ) -> list[dict]:
-        """获取最近的事件记录
+        """Get recent event records (tail-optimized with deque).
 
         Args:
-            event_type: 事件类型，为 None 时不限制类型
-            limit: 返回的最大记录数
+            event_type: Filter by event type, or None for all types.
+            limit: Maximum number of records to return.
 
         Returns:
-            事件记录列表（时间倒序）
+            List of event dicts, most recent first.
         """
         try:
             if not self.events_file.exists():
                 return []
-            lines = []
+            from collections import deque
+
+            results: deque = deque(maxlen=limit * 3 if event_type else limit)
             with open(self.events_file, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
@@ -232,11 +256,12 @@ class ExperienceBank:
                         record = json.loads(line)
                         if event_type and record.get("event_type") != event_type:
                             continue
-                        lines.append(record)
+                        results.append(record)
                     except json.JSONDecodeError:
                         continue
-            # Return most recent first
-            return lines[-limit:][::-1]
+            items = list(results)
+            items.reverse()
+            return items[:limit]
         except Exception as e:
             logger.error(f"[经历银行] 获取最近事件失败: {e}")
             return []
@@ -1323,3 +1348,64 @@ class ExperienceBank:
         except Exception as e:
             logger.debug(f"[经历银行] 读取关系画像失败: {e}")
             return None
+
+    # ========== JSONL rotation ==========
+
+    def _maybe_rotate_jsonl(self, file_path: Path, max_lines: int) -> None:
+        """Check if a JSONL file needs rotation and rotate if so.
+
+        Rotation is only checked every ``_rotation_check_interval`` records
+        to avoid stat-ing the file on every single append.  When the line
+        count exceeds *max_lines*, the file is truncated to keep only the
+        most recent half of the allowed lines.
+
+        Args:
+            file_path: Path to the JSONL file.
+            max_lines: Maximum number of lines before rotation triggers.
+        """
+        if max_lines <= 0:
+            return
+
+        self._rotation_check_counter += 1
+        if self._rotation_check_counter % self._rotation_check_interval != 0:
+            return
+
+        try:
+            if not file_path.exists():
+                return
+
+            line_count = 0
+            with open(file_path, encoding="utf-8") as f:
+                for _ in f:
+                    line_count += 1
+
+            if line_count <= max_lines:
+                return
+
+            # Read all valid lines, keep the most recent half
+            keep_count = max_lines // 2
+            lines: list[str] = []
+            with open(file_path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        json.loads(line)  # validate
+                        lines.append(line)
+                    except json.JSONDecodeError:
+                        continue
+
+            kept = lines[-keep_count:]
+            with open(file_path, "w", encoding="utf-8") as f:
+                for line in kept:
+                    f.write(line + "\n")
+
+            removed = line_count - len(kept)
+            logger.info(
+                f"[经历银行] JSONL轮转: {file_path.name} "
+                f"{line_count} -> {len(kept)} 行 (移除 {removed} 条旧记录)"
+            )
+
+        except Exception as e:
+            logger.debug(f"[经历银行] JSONL轮转检查失败: {e}")

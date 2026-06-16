@@ -266,7 +266,9 @@ class TestLocalDataManager:
 class TestEmotionManager:
     """README: 情绪检测、好感度系统"""
 
-    def test_favorability_bounded(self):
+    @pytest.mark.asyncio
+    async def test_favorability_bounded(self):
+        """Favorability is clamped to [0, 100]."""
         base_mod = _import("managers.base")
         em_mod = _import("managers.emotion_manager")
         with patch("managers.base.VersionComparator") as mc, patch("managers.base.StarTools"):
@@ -277,7 +279,7 @@ class TestEmotionManager:
             ev = MagicMock()
             ev.get_session_id.return_value = "s1"
             ev.message_obj.message_str = ""
-            mgr.update_favorability(ev)
+            await mgr.update_favorability(ev)
             assert state.favorability["s1"] <= 100.0
 
     def test_no_duplicate_analysis(self):
