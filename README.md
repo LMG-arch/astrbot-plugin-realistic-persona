@@ -819,6 +819,22 @@ pip install -r requirements.txt
     - `SelfAwarenessSystem.record_behavior` 引入 `_dirty` 标志延迟写入，`daily_routine` 末尾统一 `flush_dirty()`
   - **测试**：127 passed, 5 skipped, 0 failed；ruff format + check 零错误
 
+- v1.24.1: API合规性与并发安全修复
+  - **API合规性**：
+    - 将 11+ 处 `astrbot.core.*` 内部模块引用迁移至 `astrbot.api.*` 公共 API，或用 `try/except` 加降级守卫，避免 AstrBot 小版本升级导致插件崩溃
+    - `AiocqhttpMessageEvent` / `AiocqhttpAdapter` 等平台特定类改为条件导入，不可用时优雅降级而非抛 `ImportError`
+    - 版本检查逻辑（`VersionComparator`）对 `astrbot.core` 不可用的情况降级为警告而非崩溃
+  - **并发安全**：
+    - 修复 `experience_bank.record_conversation` 中 `_update_relationship_sync` 在 `_write_lock` 内部调用导致的死锁路径
+  - **网络连接泄漏**：
+    - 新增 `SharedState.get_http_session()` 共享 `aiohttp.ClientSession`，天气查询和图像生成 API 复用同一连接池
+    - `terminate()` 中正确关闭共享 session
+  - **Monkey-patch 策略改进**：
+    - `ToolSet.openai_schema` 补丁改为包装原方法 + 上游修复自动检测，替换整个方法 → 仅后处理返回值
+  - **其他**：
+    - `.gitignore` 补全 `*.db-shm` / `*.db-wal` / `dashboard.zip` 规则
+    - `metadata.yaml` desc 缩短为简洁功能描述
+
 ## 致谢
 
 本插件整合了以下插件的功能：

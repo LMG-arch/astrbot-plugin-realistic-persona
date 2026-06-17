@@ -110,8 +110,8 @@ class ImageManager(BaseManager):
                     if not self.state.api_key:
                         logger.warning(f"[绘图] {provider} 平台未配置API密钥，跳过")
                         continue
-                    async with aiohttp.ClientSession() as session:
-                        return await self.request_modelscope(prompt, size, session)
+                    session = self.state.get_http_session()
+                    return await self.request_modelscope(prompt, size, session)
                 elif provider.lower() == "openai":
                     openai_api_key = self.config.get("openai_api_key", "")
                     if not openai_api_key:
@@ -176,21 +176,21 @@ class ImageManager(BaseManager):
         url = f"{openai_api_url}/images/generations"
         logger.debug(f"[OpenAI DALL-E] 请求URL: {url.split('?')[0]}")
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=payload) as resp:
-                resp_text = await resp.text()
-                logger.info(f"[OpenAI DALL-E] 响应状态: {resp.status}")
+        session = self.state.get_http_session()
+        async with session.post(url, headers=headers, json=payload) as resp:
+            resp_text = await resp.text()
+            logger.info(f"[OpenAI DALL-E] 响应状态: {resp.status}")
 
-                if resp.status != 200:
-                    logger.error(f"[OpenAI DALL-E] API调用失败: HTTP {resp.status}")
-                    raise Exception(
-                        f"OpenAI DALL-E API调用失败: HTTP {resp.status}, {resp_text[:200]}"
-                    )
+            if resp.status != 200:
+                logger.error(f"[OpenAI DALL-E] API调用失败: HTTP {resp.status}")
+                raise Exception(
+                    f"OpenAI DALL-E API调用失败: HTTP {resp.status}, {resp_text[:200]}"
+                )
 
-                try:
-                    data = json.loads(resp_text)
-                except json.JSONDecodeError as e:
-                    raise Exception(f"OpenAI DALL-E 响应解析失败: {e}")
+            try:
+                data = json.loads(resp_text)
+            except json.JSONDecodeError as e:
+                raise Exception(f"OpenAI DALL-E 响应解析失败: {e}")
 
         if "data" not in data or not data["data"]:
             raise Exception("OpenAI DALL-E 未返回图片数据")
@@ -228,20 +228,20 @@ class ImageManager(BaseManager):
         )
         url = f"{aliyun_api_url}/services/aigc/text2image"
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=payload) as resp:
-                resp_text = await resp.text()
-                logger.info(f"[阿里云通义万相] 响应状态: {resp.status}")
+        session = self.state.get_http_session()
+        async with session.post(url, headers=headers, json=payload) as resp:
+            resp_text = await resp.text()
+            logger.info(f"[阿里云通义万相] 响应状态: {resp.status}")
 
-                if resp.status != 200:
-                    raise Exception(
-                        f"阿里云通义万相 API调用失败: HTTP {resp.status}, {resp_text[:200]}"
-                    )
+            if resp.status != 200:
+                raise Exception(
+                    f"阿里云通义万相 API调用失败: HTTP {resp.status}, {resp_text[:200]}"
+                )
 
-                try:
-                    data = json.loads(resp_text)
-                except json.JSONDecodeError as e:
-                    raise Exception(f"阿里云通义万相 响应解析失败: {e}")
+            try:
+                data = json.loads(resp_text)
+            except json.JSONDecodeError as e:
+                raise Exception(f"阿里云通义万相 响应解析失败: {e}")
 
         if (
             "output" not in data

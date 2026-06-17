@@ -7,9 +7,8 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from astrbot.api import logger
-from astrbot.core.config.astrbot_config import AstrBotConfig
-from astrbot.core.star.context import Context
+from astrbot.api import AstrBotConfig, logger
+from astrbot.api.star import Context
 
 from .operate import PostOperator
 

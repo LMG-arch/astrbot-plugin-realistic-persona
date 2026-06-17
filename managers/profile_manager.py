@@ -1,7 +1,15 @@
 from astrbot.api import logger
-from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
-    AiocqhttpMessageEvent,
-)
+from astrbot.api.event import AstrMessageEvent
+
+try:
+    from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
+        AiocqhttpMessageEvent,
+    )
+
+    _AIOCQHTTP_AVAILABLE = True
+except ImportError:
+    _AIOCQHTTP_AVAILABLE = False
+    AiocqhttpMessageEvent = None  # type: ignore[assignment, misc]
 
 from ..emotions import EMOTION_INTENSITY_MAP, EmotionAnalyzer, EmotionType
 from .base import BaseManager
@@ -11,9 +19,13 @@ class ProfileManager(BaseManager):
     """Manages auto profile updates based on emotion changes."""
 
     async def auto_update_profile_on_emotion(
-        self, event: AiocqhttpMessageEvent, emotion: EmotionType, intensity: float
+        self, event: AstrMessageEvent, emotion: EmotionType, intensity: float
     ):
         """Auto update profile based on emotion."""
+        if not _AIOCQHTTP_AVAILABLE:
+            return
+        if not isinstance(event, AiocqhttpMessageEvent):
+            return
         if not self.state.auto_profile_updater:
             return
 

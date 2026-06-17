@@ -136,14 +136,15 @@ class ExperienceBank:
                 with open(self.conversations_file, "a", encoding="utf-8") as f:
                     f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-                # 更新关系网络
-                self._update_relationship_sync(
-                    user_id,
-                    {
-                        "last_chat": now.isoformat(),
-                        "interaction_type": "conversation",
-                    },
-                )
+            # Update relationship network outside _write_lock to avoid deadlock
+            # (_update_relationship_sync acquires _write_lock internally)
+            self._update_relationship_sync(
+                user_id,
+                {
+                    "last_chat": now.isoformat(),
+                    "interaction_type": "conversation",
+                },
+            )
 
             logger.info(f"[经历银行] 对话已记录: 用户 {user_id}")
 

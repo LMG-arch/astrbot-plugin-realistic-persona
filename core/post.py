@@ -11,7 +11,7 @@ import aiosqlite
 import pydantic
 
 from astrbot.api import logger
-from astrbot.core.star.star_tools import StarTools
+from astrbot.api.star import StarTools
 
 from .comment import Comment
 

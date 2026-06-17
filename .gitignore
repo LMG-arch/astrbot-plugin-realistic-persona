@@ -56,3 +56,10 @@ cache/
 .astrbot
 *.db
 *.db-journal
+*.db-shm
+*.db-wal
+*.db-wal
+
+# Runtime artifacts
+dashboard.zip
+mcp_server.json

@@ -10,11 +10,9 @@ from urllib.parse import quote
 import aiohttp
 from aiocqhttp import CQHttp
 
-from astrbot.api import logger
-from astrbot.core.config.astrbot_config import AstrBotConfig
-from astrbot.core.provider.provider import Provider
-from astrbot.core.star.context import Context
-from astrbot.core.star.star_tools import StarTools
+from astrbot.api import AstrBotConfig, logger
+from astrbot.api.provider import Provider
+from astrbot.api.star import Context, StarTools
 
 from .post import Post
 

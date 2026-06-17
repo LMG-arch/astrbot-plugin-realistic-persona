@@ -1,11 +1,17 @@
 import time
 
-from astrbot.api import logger
-from astrbot.core.config.astrbot_config import AstrBotConfig
-from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
-    AiocqhttpMessageEvent,
-)
-from astrbot.core.star.context import Context
+from astrbot.api import AstrBotConfig, logger
+from astrbot.api.star import Context
+
+try:
+    from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
+        AiocqhttpMessageEvent,
+    )
+
+    _AIOCQHTTP_AVAILABLE = True
+except ImportError:
+    _AIOCQHTTP_AVAILABLE = False
+    AiocqhttpMessageEvent = None  # type: ignore[assignment, misc]
 
 from .comment import Comment
 from .llm_action import LLMAction

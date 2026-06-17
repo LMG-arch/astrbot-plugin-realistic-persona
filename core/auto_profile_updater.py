@@ -11,9 +11,16 @@ from datetime import datetime
 from pathlib import Path
 
 from astrbot.api import logger
-from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
-    AiocqhttpMessageEvent,
-)
+
+try:
+    from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
+        AiocqhttpMessageEvent,
+    )
+
+    _AIOCQHTTP_AVAILABLE = True
+except ImportError:
+    _AIOCQHTTP_AVAILABLE = False
+    AiocqhttpMessageEvent = None  # type: ignore[assignment, misc]
 
 from .utils import atomic_write_json
 
@@ -433,7 +440,7 @@ class AutoProfileUpdater:
 
     async def check_and_update(
         self,
-        event: AiocqhttpMessageEvent,
+        event,
         emotion: str,
         intensity: float,
         llm_action=None,
@@ -459,7 +466,7 @@ class AutoProfileUpdater:
 
     async def _do_check_and_update(
         self,
-        event: AiocqhttpMessageEvent,
+        event,
         emotion: str,
         intensity: float,
         llm_action=None,

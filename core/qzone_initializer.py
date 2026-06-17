@@ -7,9 +7,16 @@ import asyncio
 
 from astrbot.api import logger
 from astrbot.api.star import StarTools
-from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_platform_adapter import (
-    AiocqhttpAdapter,
-)
+
+try:
+    from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_platform_adapter import (
+        AiocqhttpAdapter,
+    )
+
+    _AIOCQHTTP_ADAPTER_AVAILABLE = True
+except ImportError:
+    _AIOCQHTTP_ADAPTER_AVAILABLE = False
+    AiocqhttpAdapter = None  # type: ignore[assignment, misc]
 
 try:
     from .llm_action import LLMAction
@@ -47,6 +54,9 @@ async def initialize_qzone(state, context) -> bool:
     # 1. Find aiocqhttp client
     logger.info("[QQ空间] 查找 aiocqhttp 客户端...")
     client = None
+    if not _AIOCQHTTP_ADAPTER_AVAILABLE:
+        logger.warning("[QQ空间] AiocqhttpAdapter 不可用，初始化终止")
+        return False
     for inst in context.platform_manager.platform_insts:
         if isinstance(inst, AiocqhttpAdapter):
             if client := inst.get_client():
@@ -185,6 +195,9 @@ async def _standalone_check_and_reply_comments(state):
 
 async def wait_for_qzone_ws(state, context, timeout: int = 10):
     """Wait for aiocqhttp WebSocket connection before initializing Qzone."""
+    if not _AIOCQHTTP_ADAPTER_AVAILABLE:
+        logger.warning("[QQ空间] AiocqhttpAdapter 不可用，跳过等待")
+        return
     client = None
     for inst in context.platform_manager.platform_insts:
         if isinstance(inst, AiocqhttpAdapter):

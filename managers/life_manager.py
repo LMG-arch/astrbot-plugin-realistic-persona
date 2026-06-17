@@ -325,22 +325,22 @@ class LifeManager(BaseManager):
         weather_text = ""
 
         try:
-            async with aiohttp.ClientSession() as session:
-                url = f"https://wttr.in/{quote(self.state.weather_location, safe='')}?format=3&lang=zh-cn"
-                async with session.get(
-                    url, timeout=aiohttp.ClientTimeout(total=10)
-                ) as resp:
-                    if resp.status == 200:
-                        weather_text = (await resp.text()).strip()
-                        if (
-                            weather_text
-                            and "抱歉" not in weather_text
-                            and "无法" not in weather_text
-                            and "未知" not in weather_text
-                        ):
-                            logger.info(f"通过wttr.in获取天气成功: {weather_text}")
-                        else:
-                            weather_text = ""
+            session = self.state.get_http_session()
+            url = f"https://wttr.in/{quote(self.state.weather_location, safe='')}?format=3&lang=zh-cn"
+            async with session.get(
+                url, timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
+                if resp.status == 200:
+                    weather_text = (await resp.text()).strip()
+                    if (
+                        weather_text
+                        and "抱歉" not in weather_text
+                        and "无法" not in weather_text
+                        and "未知" not in weather_text
+                    ):
+                        logger.info(f"通过wttr.in获取天气成功: {weather_text}")
+                    else:
+                        weather_text = ""
         except Exception as e:
             logger.debug(f"通过wttr.in获取天气失败: {e}")
 

@@ -1,10 +1,18 @@
 import asyncio
 from pathlib import Path
 
+import aiohttp
+
 from astrbot.api import logger
 from astrbot.api.star import Context, StarTools
-from astrbot.core.config.default import VERSION
-from astrbot.core.utils.version_comparator import VersionComparator
+
+try:
+    from astrbot.core.config.default import VERSION
+    from astrbot.core.utils.version_comparator import VersionComparator
+
+    _CORE_INTROSPECTION_AVAILABLE = True
+except ImportError:
+    _CORE_INTROSPECTION_AVAILABLE = False
 
 from ..context_events import ContextState, EventTrigger, ProactiveMessageManager
 from ..core.async_thinking_scheduler import AsyncThinkingScheduler
@@ -32,9 +40,15 @@ class SharedState:
         self.context = context
         self.config = config
 
-        # Version check
-        if not VersionComparator.compare_version(VERSION, "4.1.0") >= 0:
-            raise Exception("AstrBot 版本过低, 请升级至 4.1.0 或更高版本")
+        # Version check (graceful degradation if core internals unavailable)
+        if _CORE_INTROSPECTION_AVAILABLE:
+            if not VersionComparator.compare_version(VERSION, "4.1.0") >= 0:
+                raise Exception("AstrBot 版本过低, 请升级至 4.1.0 或更高版本")
+        else:
+            logger.warning(
+                "[版本检查] 无法导入 astrbot.core 版本信息，跳过版本检查。"
+                "如果遇到兼容性问题，请升级 AstrBot 至 4.1.0+"
+            )
 
         # ========== AI drawing config ==========
         self.api_key = config.get("api_key")
@@ -147,6 +161,8 @@ class SharedState:
         self._qzone_initialized: bool = False
         self._cached_bot = None
         self._background_tasks: set = set()
+        # Shared aiohttp session for HTTP requests (weather, news, image APIs)
+        self._http_session: aiohttp.ClientSession | None = None
 
         # ========== Sub-module instances ==========
         self.local_data_manager: LocalDataManager | None = None
@@ -386,6 +402,26 @@ class SharedState:
         except Exception:
             return None
         return None
+
+    # ========== Shared HTTP session ==========
+
+    def get_http_session(self) -> aiohttp.ClientSession:
+        """Get or create a shared aiohttp.ClientSession.
+
+        Reuse a single session across all managers to avoid TCP connection
+        leaks from creating per-request sessions.
+        """
+        if self._http_session is None or self._http_session.closed:
+            self._http_session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=30),
+            )
+        return self._http_session
+
+    async def close_http_session(self):
+        """Close the shared aiohttp.ClientSession if it exists."""
+        if self._http_session and not self._http_session.closed:
+            await self._http_session.close()
+            self._http_session = None
 
     async def get_persona_profile(self) -> str:
         """Get persona profile, preferring plugin config over system persona."""

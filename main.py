@@ -19,9 +19,16 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.message_components import BaseMessageComponent, Image, Plain
 from astrbot.api.provider import LLMResponse, ProviderRequest
 from astrbot.api.star import Context, Star, StarTools, register
-from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
-    AiocqhttpMessageEvent,
-)
+
+try:
+    from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
+        AiocqhttpMessageEvent,
+    )
+
+    _AIOCQHTTP_AVAILABLE = True
+except ImportError:
+    _AIOCQHTTP_AVAILABLE = False
+    AiocqhttpMessageEvent = None  # type: ignore[assignment, misc]
 
 try:
     import pillowmd
@@ -343,6 +350,13 @@ class Main(Star):
             logger.info("拟人化角色行为系统插件正在卸载...")
 
             await self.state.cancel_all_background_tasks_safe()
+
+            # Close shared HTTP session
+            try:
+                await self.state.close_http_session()
+                logger.debug("共享HTTP会话已关闭")
+            except Exception as e:
+                logger.debug(f"关闭共享HTTP会话失败: {e}")
 
             if self.state.personality_evolution:
                 try:
@@ -801,7 +815,10 @@ class Main(Star):
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("发说说")
-    async def publish_feed(self, event: AiocqhttpMessageEvent):
+    async def publish_feed(self, event: AstrMessageEvent):
+        if not _AIOCQHTTP_AVAILABLE:
+            yield event.plain_result("此功能仅支持 QQ (aiocqhttp) 平台")
+            return
         if not self.state.enable_qzone:
             await event.send(
                 event.plain_result("QQ空间功能未启用，请在配置中开启 enable_qzone")
@@ -832,7 +849,10 @@ class Main(Star):
         await self.state.operator.publish_feed(event=event, text=text, images=images)
 
     @filter.command("写说说", alias={"写稿", "写草稿"})
-    async def write_draft(self, event: AiocqhttpMessageEvent, topic: str | None = None):
+    async def write_draft(self, event: AstrMessageEvent, topic: str | None = None):
+        if not _AIOCQHTTP_AVAILABLE:
+            yield event.plain_result("此功能仅支持 QQ (aiocqhttp) 平台")
+            return
         if not self.state.enable_qzone:
             await event.send(
                 event.plain_result("QQ空间功能未启用，请在配置中开启 enable_qzone")
@@ -989,7 +1009,11 @@ class Main(Star):
             except Exception as e:
                 logger.debug(f"[人格演化] process_interaction 失败: {e}")
 
-        if self.state.auto_profile_updater and isinstance(event, AiocqhttpMessageEvent):
+        if (
+            self.state.auto_profile_updater
+            and _AIOCQHTTP_AVAILABLE
+            and isinstance(event, AiocqhttpMessageEvent)
+        ):
             from .emotions import EMOTION_INTENSITY_MAP, EmotionAnalyzer
 
             self.state._cached_bot = event.bot

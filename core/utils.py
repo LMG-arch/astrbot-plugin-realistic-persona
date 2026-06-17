@@ -9,11 +9,18 @@ from typing import Any, Union
 import aiohttp
 
 from astrbot.api import logger
-from astrbot.core.message.components import At, Image, Reply
-from astrbot.core.platform import AstrMessageEvent
-from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
-    AiocqhttpMessageEvent,
-)
+from astrbot.api.event import AstrMessageEvent
+from astrbot.api.message_components import Image, Reply
+
+try:
+    from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
+        AiocqhttpMessageEvent,
+    )
+
+    _AIOCQHTTP_AVAILABLE = True
+except ImportError:
+    _AIOCQHTTP_AVAILABLE = False
+    AiocqhttpMessageEvent = None  # type: ignore[assignment, misc]
 
 BytesOrStr = Union[str, bytes]  # noqa: UP007
 
@@ -49,8 +56,13 @@ def atomic_write_json(file_path: Path | str, data: Any) -> None:
         raise
 
 
-def get_ats(event: AiocqhttpMessageEvent) -> list[str]:
+def get_ats(event) -> list[str]:
     """获取被at者们的id列表,(@增强版)"""
+    if not _AIOCQHTTP_AVAILABLE:
+        logger.debug("[utils] AiocqhttpMessageEvent 不可用，get_ats 返回空列表")
+        return []
+    from astrbot.api.message_components import At
+
     ats = [str(seg.qq) for seg in event.get_messages()[1:] if isinstance(seg, At)]
     for arg in event.message_str.split(" "):
         if arg.startswith("@") and arg[1:].isdigit():
@@ -58,8 +70,10 @@ def get_ats(event: AiocqhttpMessageEvent) -> list[str]:
     return ats
 
 
-async def get_nickname(event: AiocqhttpMessageEvent, user_id) -> str:
+async def get_nickname(event, user_id) -> str:
     """获取指定群友的群昵称或Q名"""
+    if not _AIOCQHTTP_AVAILABLE:
+        return str(user_id)
     client = event.bot
     group_id = event.get_group_id()
     if group_id:
