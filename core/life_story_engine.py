@@ -503,7 +503,11 @@ class LifeStoryEngine:
                 )
 
         except Exception as e:
-            logger.error(f"[人生故事引擎] 生成上下文缓存失败: {e}")
+            # Back off: set a short retry window so we don't hammer a
+            # failing provider on every cycle.  1 hour cooldown.
+            self.context_cache["cache_valid_until"] = datetime.now().timestamp() + 3600
+            self._save_context_cache()
+            logger.warning(f"[人生故事引擎] 生成上下文缓存失败，1小时后重试: {e}")
 
     def _build_compact_context_prompt(self) -> str:
         """构建精简上下文提示词"""
@@ -541,6 +545,10 @@ class LifeStoryEngine:
         Returns:
             精简的上下文字符串
         """
+        # Guard against missing or empty cache
+        if not self.context_cache:
+            return self.state.get("base_persona", "")
+
         # 检查缓存是否有效
         current_time = datetime.now().timestamp()
         cache_valid = self.context_cache.get("cache_valid_until", 0)
